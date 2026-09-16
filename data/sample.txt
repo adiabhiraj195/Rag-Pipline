@@ -1,0 +1,11 @@
+Retrieval-Augmented Generation (RAG) is an AI framework for improving the quality of LLM-generated responses by grounding the model on external sources of knowledge to supplement the LLM's internal representation of information.
+
+Implementing RAG in an organization's workflow offers several key benefits:
+1. Cost-effective implementation: Organizations can avoid expensive fine-tuning of foundational LLMs.
+2. Up-to-date information: Vector stores can be refreshed continuously with new documentation.
+3. User trust through citations: LLMs can cite exact sources for their answers.
+4. Data security and governance: Multi-tenant metadata enables strict access control.
+
+In this pipeline, documents are split into semantic chunks, embedded using state-of-the-art embedding models, and stored in a high-performance Redis Vector Store.
+A background BullMQ queue manages asynchronous ingestion so that clients get immediate responses without request timeouts.
+
