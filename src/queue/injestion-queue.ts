@@ -20,7 +20,7 @@ export interface IngestionJobData {
 export const ingestionQueue = new Queue<IngestionJobData>(INGESTION_QUEUE_NAME, {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 1,
+    attempts: 2,
     backoff: {
       type: "exponential",
       delay: 2000,

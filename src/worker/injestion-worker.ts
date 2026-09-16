@@ -70,6 +70,7 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
       if (s3Key) {
         console.log(`[Worker] [Job #${job.id}] Downloading file content from S3 (Key: ${s3Key})...`);
         const textContent = await downloadFileContentFromS3(s3Key);
+        // console.log(`[Worker] [Job #${job.id}] Downloaded Content : ${textContent}`)
         console.log(`[Worker] [Job #${job.id}] Successfully downloaded ${textContent.length} characters from S3.`);
 
         loadedDocs = loadTextContent(textContent, {

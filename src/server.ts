@@ -22,4 +22,5 @@ app.listen(PORT, () => {
   console.log(`[Server] Presigned upload URL: POST http://localhost:${PORT}/rag/upload-url (or /upload-url)`);
   console.log(`[Server] Ingestion endpoint: POST http://localhost:${PORT}/rag/injestTXT (or /injestTXT)`);
   console.log(`[Server] Job status endpoint: GET http://localhost:${PORT}/rag/job-status/:jobId`);
+  console.log(`[Server] Chat RAG endpoint: POST http://localhost:${PORT}/rag/chat (or /chat)`);
 });

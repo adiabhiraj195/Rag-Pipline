@@ -4,6 +4,7 @@ import {
   injestFileToStore,
   getJobStatus,
 } from "../controller/injestion-controller";
+import { handleChatQuery } from "../controller/chat-controller";
 
 const ragRouters = Router();
 
@@ -16,5 +17,8 @@ ragRouters.post("/injestTXT", injestFileToStore);
 
 // Route to check status and progress of an ingestion job
 ragRouters.get("/job-status/:jobId", getJobStatus);
+
+// Route for RAG chat retrieval pipeline
+ragRouters.post("/chat", handleChatQuery);
 
 export default ragRouters;

@@ -2,21 +2,20 @@ import "dotenv/config";
 import { ChatGroq } from "@langchain/groq";
 // import { OpenAIEmbeddings } from "@langchain/openai";
 
-import { CohereEmbeddings } from "@langchain/cohere";
-
+import { CohereEmbeddings, CohereRerank } from "@langchain/cohere";
 
 export const groqModel = new ChatGroq({
   apiKey: process.env.GROQ_API_KEY,
-  model: "openai/gpt-oss-120b",
+  model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
 });
 
-
-export const embeddingModel =  new CohereEmbeddings({
-  model: "embed-english-v3.0",
-  apiKey: process.env.COHERE_API_KEY
+export const embeddingModel = new CohereEmbeddings({
+  model: process.env.COHERE_EMBEDDING_MODEL || "embed-english-v3.0",
+  apiKey: process.env.COHERE_API_KEY,
 });
 
-// export const embeddingModel = new OpenAIEmbeddings({
-//   apiKey: process.env.OPENAI_API_KEY,
-//   model: "text-embedding-3-small",
-// });
+export const cohereReranker = new CohereRerank({
+  apiKey: process.env.COHERE_API_KEY,
+  model: process.env.COHERE_RERANK_MODEL || "rerank-v3.5",
+  topN: 5,
+});
