@@ -1,11 +1,12 @@
 import { Document } from "@langchain/classic/document";
 import { CohereRerank } from "@langchain/cohere";
-import { cohereReranker } from "../llm/model";
+import { cohereReranker } from "../../llm/model";
 
 export interface RerankOptions {
   topN?: number;
   model?: string;
   apiKey?: string;
+  scoreThreshold?: number;
 }
 
 /**
@@ -53,7 +54,7 @@ export async function rerankDocuments(
     // compressDocuments returns documents ordered by relevanceScore
     const rerankedDocs = await reranker.compressDocuments(documents, query);
 
-    return rerankedDocs.map((doc, idx) => {
+    const mappedDocs = rerankedDocs.map((doc, idx) => {
       return new Document({
         pageContent: doc.pageContent,
         metadata: {
@@ -67,6 +68,17 @@ export async function rerankDocuments(
         },
       });
     });
+
+    if (options.scoreThreshold !== undefined) {
+      return mappedDocs.filter(
+        (doc) =>
+          doc.metadata?.relevanceScore === null ||
+          doc.metadata?.relevanceScore === undefined ||
+          doc.metadata.relevanceScore >= options.scoreThreshold!
+      );
+    }
+
+    return mappedDocs;
   } catch (error: any) {
     console.error(
       `[ReRanker] Cohere rerank failed (${error.message}). Falling back to top RRF candidates.`

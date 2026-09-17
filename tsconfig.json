@@ -3,6 +3,8 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "target": "ES2023",
+    "outDir": "./dist",                      
+    "rootDir": "./src",      
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

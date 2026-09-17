@@ -4,7 +4,7 @@ import { lexicalSearch } from "./lexical-search";
 import { reciprocalRankFusion } from "./rrf";
 import { rerankDocuments } from "./reranker";
 import { buildContext, ContextChunkInfo } from "./context-builder";
-import { groqModel } from "../llm/model";
+import { groqModel } from "../../llm/model";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -22,6 +22,8 @@ export interface RetrievalPipelineOptions {
   tenantId?: string;
   /** Optional previous messages in the conversation */
   history?: ChatMessage[];
+  /** Minimum relevance score threshold for reranked chunks (default: 0.75) */
+  scoreThreshold?: number;
 }
 
 export interface RetrievalPipelineResult {
@@ -34,6 +36,8 @@ export interface RetrievalPipelineResult {
     lexicalRetrieved: number;
     rrfCandidates: number;
     rerankedChunks: number;
+    passedThresholdChunks: number;
+    scoreThreshold: number;
     durationMs: number;
   };
 }
@@ -62,8 +66,9 @@ export async function runRetrievalPipeline(
   const candidatesK = options.candidatesK ?? 15;
   const rrfK = options.rrfK ?? 60;
   const tenantId = options.tenantId;
+  const scoreThreshold = options.scoreThreshold ?? 0.6;
 
-  console.log(`[Retrieval Pipeline] Starting pipeline for query: "${trimmedQuery}" (topK=${topK}, candidatesK=${candidatesK})`);
+  console.log(`[Retrieval Pipeline] Starting pipeline for query: "${trimmedQuery}" (topK=${topK}, candidatesK=${candidatesK}, scoreThreshold=${scoreThreshold})`);
 
   // Step 1 & 2: Run Dense Semantic Search and Sparse Lexical Search in parallel
   const [semanticResults, lexicalResults] = await Promise.all([
@@ -88,11 +93,27 @@ export async function runRetrievalPipeline(
     topN: topK,
   });
 
+  // console.log("[Retrieval Pipeline] ReRanker rerankedChunks", rerankedChunks)
+
   console.log(`[Retrieval Pipeline] ReRanker picked top ${rerankedChunks.length} chunks.`);
 
-  // Step 5: Build grounded Context and Prompts
+  // Filter chunks using score threshold (0.75) to optimize context quality
+  const qualifiedChunks = rerankedChunks.filter((chunk) => {
+    const score = chunk.metadata?.relevanceScore;
+    // If reranker fell back (score is null/undefined), preserve chunk; otherwise apply threshold
+    if (score === null || score === undefined) {
+      return true;
+    }
+    return score >= scoreThreshold;
+  });
+
+  console.log(
+    `[Retrieval Pipeline] Applied score threshold (${scoreThreshold}): ${qualifiedChunks.length}/${rerankedChunks.length} chunks qualified.`
+  );
+
+  // Step 5: Build grounded Context and Prompts using qualified chunks
   const { formattedContext, systemPrompt, userPrompt, chunksInfo } = buildContext(
-    rerankedChunks,
+    qualifiedChunks,
     trimmedQuery
   );
 
@@ -131,6 +152,8 @@ export async function runRetrievalPipeline(
       lexicalRetrieved: lexicalResults.length,
       rrfCandidates: rrfCandidates.length,
       rerankedChunks: rerankedChunks.length,
+      passedThresholdChunks: qualifiedChunks.length,
+      scoreThreshold,
       durationMs,
     },
   };

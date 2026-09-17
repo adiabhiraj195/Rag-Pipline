@@ -10,7 +10,8 @@
   "scripts": {
     "test": "tsx src/test-smoke.ts",
     "test:retrieval": "tsx src/test-retrieval.ts",
-    "dev": "tsx watch src/server.ts"
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

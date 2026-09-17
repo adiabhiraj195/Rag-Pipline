@@ -66,19 +66,19 @@ export function buildContext(chunks: Document[], query: string): BuiltContext {
 
   const systemPrompt = `You are a knowledgeable, faithful AI assistant answering questions using only the provided context.
 
-Follow these strict rules:
-1. Ground your answers ONLY in the facts directly provided in the context below. Do not assume or extrapolate facts not present.
-2. If the context does not contain enough information to answer the question, clearly state: "Based on the provided documentation, I do not have enough information to answer this question."
-3. Cite the relevant source numbers or document names (e.g. "[Source 1]" or "according to filename.txt") when making statements.
-4. Be concise, clear, and structured in your explanations.`;
+    Follow these strict rules:
+    1. Ground your answers ONLY in the facts directly provided in the context below. Do not assume or extrapolate facts not present.
+    2. If the context does not contain enough information to answer the question, clearly state: "Based on the provided documentation, I do not have enough information to answer this question."
+    3. Cite the relevant source numbers or document names (e.g. "[Source 1]" or "according to filename.txt") when making statements.
+    4. Be concise, clear, and structured in your explanations.`;
 
   const userPrompt = `Context information:
----------------------
-${formattedContext}
----------------------
+    ---------------------
+    ${formattedContext}
+    ---------------------
 
-Based strictly on the context above, please answer the following question:
-Question: ${query}`;
+    Based strictly on the context above, please answer the following question:
+    Question: ${query}`;
 
   return {
     formattedContext,

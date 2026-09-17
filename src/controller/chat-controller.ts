@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
-import { runRetrievalPipeline } from "../retrive/retrieval-pipeline";
+import { runRetrievalPipeline } from "../rag/retrive/retrieval-pipeline";
+import { rewriteQuery } from "../services/query-rewriting";
 
 /**
  * Controller to handle chat queries using hybrid retrieval (Dense Semantic + Lexical + RRF + ReRanker + LLM).
@@ -49,17 +50,62 @@ export async function handleChatQuery(
       }
     }
 
-    const result = await runRetrievalPipeline(query, {
+    const normalizedHistory = Array.isArray(history) ? history : [];
+
+    // Step 1: Pre-process query through rewriteQuery to get optimal query or clarification
+    console.log(
+      `[Chat Controller] Evaluating query: "${query}" with ${normalizedHistory.length} history items.`
+    );
+    const rewriteResult = await rewriteQuery(query, normalizedHistory);
+    console.log(
+      `[Chat Controller] Query rewrite status: "${rewriteResult.status}", query: "${rewriteResult.query}"`
+    );
+
+    // If clarification is requested, immediately return response without RAG lookup
+    if (rewriteResult.status === "clarify") {
+      const clarificationPrompt =
+        rewriteResult.response ||
+        "Your query is not clear enough. Could you please clarify what you mean?";
+
+      res.status(200).json({
+        success: true,
+        status: "clarify",
+        message: clarificationPrompt,
+        data: {
+          status: "clarify",
+          clarification: clarificationPrompt,
+          originalQuery: query,
+        },
+      });
+      return;
+    }
+
+    // Step 2: Use optimal rewritten or clear query for retrieval
+    const optimalQuery =
+      rewriteResult.status === "rewritten" && rewriteResult.query
+        ? rewriteResult.query
+        : (rewriteResult.query || query);
+
+    console.log(
+      `[Chat Controller] Passing optimal query to retrieval pipeline: "${optimalQuery}"`
+    );
+
+    const result = await runRetrievalPipeline(optimalQuery, {
       topK: topK ? Number(topK) : undefined,
       rrfK: rrfK ? Number(rrfK) : undefined,
       tenantId: tenantId ? String(tenantId) : undefined,
-      history: Array.isArray(history) ? history : undefined,
+      history: normalizedHistory,
     });
 
     res.status(200).json({
       success: true,
       message: "Chat query processed successfully.",
-      data: result,
+      data: {
+        ...result,
+        originalQuery: query,
+        rewrittenQuery: optimalQuery,
+        queryRewriteStatus: rewriteResult.status,
+      },
     });
   } catch (error: any) {
     console.error("[Chat Controller Error]", error);

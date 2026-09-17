@@ -1,5 +1,5 @@
 import { Document } from "@langchain/classic/document";
-import { getVectorStore } from "../vector/vector-store";
+import { getVectorStore } from "../../vector/vector-store";
 
 export interface SemanticSearchOptions {
   k?: number;

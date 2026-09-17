@@ -1,5 +1,5 @@
 import { Document } from "@langchain/classic/document";
-import { getRedisClient } from "../config/redis";
+import { getRedisClient } from "../../config/redis";
 
 export interface LexicalSearchOptions {
   k?: number;

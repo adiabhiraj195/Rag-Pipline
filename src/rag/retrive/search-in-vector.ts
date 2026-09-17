@@ -1,5 +1,5 @@
-import { embeddingModel } from "../llm/model";
-import { getVectorStore } from "../vector/vector-store";
+import { embeddingModel } from "../../llm/model";
+import { getVectorStore } from "../../vector/vector-store";
 
 
 export async function searchQueryInVectorStore(query: string, k: number = 5) {

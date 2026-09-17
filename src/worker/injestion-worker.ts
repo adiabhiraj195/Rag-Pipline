@@ -11,8 +11,8 @@ import {
   loadTextDocument,
   loadTextContent,
   splitLoadedTextDocument,
-} from "../injestion/load-document";
-import { enrichChunks } from "../injestion/enrich-chunks";
+} from "../rag/injestion/load-document";
+import { enrichChunks } from "../rag/injestion/enrich-chunks";
 import { getVectorStore } from "../vector/vector-store";
 import { downloadFileContentFromS3 } from "../config/s3";
 import { prisma } from "../config/prisma";
