@@ -18,7 +18,9 @@ export interface RetrievalPipelineOptions {
   candidatesK?: number;
   /** RRF smoothing constant (default: 60) */
   rrfK?: number;
-  /** Tenant ID to partition retrieval (default: optional) */
+  /** User ID to partition retrieval (default: optional) */
+  userId?: string;
+  /** Tenant ID to partition retrieval (for backward compatibility) */
   tenantId?: string;
   /** Optional previous messages in the conversation */
   history?: ChatMessage[];
@@ -65,15 +67,16 @@ export async function runRetrievalPipeline(
   const topK = options.topK ?? 5;
   const candidatesK = options.candidatesK ?? 15;
   const rrfK = options.rrfK ?? 60;
+  const userId = options.userId;
   const tenantId = options.tenantId;
   const scoreThreshold = options.scoreThreshold ?? 0.6;
 
-  console.log(`[Retrieval Pipeline] Starting pipeline for query: "${trimmedQuery}" (topK=${topK}, candidatesK=${candidatesK}, scoreThreshold=${scoreThreshold})`);
+  console.log(`[Retrieval Pipeline] Starting pipeline for query: "${trimmedQuery}" (topK=${topK}, candidatesK=${candidatesK}, scoreThreshold=${scoreThreshold}, userId=${userId || "none"})`);
 
   // Step 1 & 2: Run Dense Semantic Search and Sparse Lexical Search in parallel
   const [semanticResults, lexicalResults] = await Promise.all([
     semanticSearch(trimmedQuery, { k: candidatesK }),
-    lexicalSearch(trimmedQuery, { k: candidatesK, tenantId }),
+    lexicalSearch(trimmedQuery, { k: candidatesK, userId, tenantId }),
   ]);
 
   console.log(

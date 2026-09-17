@@ -3,6 +3,7 @@ import { getRedisClient } from "../../config/redis";
 
 export interface LexicalSearchOptions {
   k?: number;
+  userId?: string;
   tenantId?: string;
   indexName?: string;
 }
@@ -164,8 +165,10 @@ export async function lexicalSearch(
         metadata = {};
       }
 
-      // If tenantId filter is provided, enforce it
-      if (options.tenantId && metadata.tenantId && metadata.tenantId !== options.tenantId) {
+      // If userId or tenantId filter is provided, enforce it
+      const targetOwnerId = options.userId || options.tenantId;
+      const docOwnerId = metadata.userId || metadata.tenantId;
+      if (targetOwnerId && docOwnerId && docOwnerId !== targetOwnerId) {
         continue;
       }
 

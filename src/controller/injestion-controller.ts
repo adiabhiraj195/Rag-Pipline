@@ -28,7 +28,8 @@ export async function createPresignedUrl(
     const {
       filename,
       mimeType = "text/plain",
-      tenantId = DEFAULT_TENANT_ID,
+      userId,
+      tenantId,
       expiresIn = 3600,
     } = req.body;
 
@@ -42,8 +43,8 @@ export async function createPresignedUrl(
 
     const sanitizedFilename = path.basename(filename.trim());
     const randomPrefix = crypto.randomUUID();
-    const safeTenantId = isValidUuid(tenantId) ? tenantId : DEFAULT_TENANT_ID;
-    const s3Key = `uploads/${safeTenantId}/${randomPrefix}-${sanitizedFilename}`;
+    const effectiveUserId = req.user?.userId || (isValidUuid(userId) ? userId : (isValidUuid(tenantId) ? tenantId : "general"));
+    const s3Key = `uploads/${effectiveUserId}/${randomPrefix}-${sanitizedFilename}`;
 
     const presignedData = await generatePresignedUploadUrl({
       key: s3Key,
@@ -99,7 +100,8 @@ export async function injestFileToStore(
       filename,
       mimeType = "text/plain",
       documentId,
-      tenantId = DEFAULT_TENANT_ID,
+      userId,
+      tenantId,
       version = 1,
       metadata = {},
       chunkSize,
@@ -159,7 +161,7 @@ export async function injestFileToStore(
 
     // Ensure valid UUID for document ID and tenant ID (satisfies PostgreSQL UUID constraint)
     const docId = isValidUuid(documentId) ? documentId : crypto.randomUUID();
-    const safeTenantId = isValidUuid(tenantId) ? tenantId : DEFAULT_TENANT_ID;
+    const effectiveUserId = req.user?.userId || (isValidUuid(userId) ? userId : null);
     const docVersion = Number(version) || 1;
     const storageKey = s3Key || docFilename;
 
@@ -169,7 +171,7 @@ export async function injestFileToStore(
       dbRecord = await prisma.document.create({
         data: {
           id: docId,
-          tenantId: safeTenantId,
+          userId: effectiveUserId,
           filename: docFilename,
           mimeType,
           s3Key: storageKey,
@@ -193,7 +195,8 @@ export async function injestFileToStore(
       s3Key: s3Key || undefined,
       filename: docFilename,
       mimeType,
-      tenantId: safeTenantId,
+      userId: effectiveUserId || undefined,
+      tenantId: isValidUuid(tenantId) ? tenantId : undefined,
       version: docVersion,
       source: docFilename,
       metadata,

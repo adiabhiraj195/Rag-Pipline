@@ -2,7 +2,8 @@ import { Document } from "@langchain/classic/document";
 
 export interface EnrichChunksParams {
   chunks: Document[];
-  tenantId: string;
+  userId?: string;
+  tenantId?: string;
   documentId: string;
   version: number;
   customMetadata?: Record<string, any>;
@@ -10,6 +11,7 @@ export interface EnrichChunksParams {
 
 export function enrichChunks({
   chunks,
+  userId,
   tenantId,
   documentId,
   version,
@@ -26,6 +28,7 @@ export function enrichChunks({
       metadata: {
         ...chunk.metadata,
         ...customMetadata,
+        userId,
         tenantId,
         documentId,
         version,

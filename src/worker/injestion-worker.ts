@@ -21,7 +21,8 @@ import type { Document } from "@langchain/classic/document";
 export interface IngestionJobResult {
   success: boolean;
   documentId: string;
-  tenantId: string;
+  userId?: string;
+  tenantId?: string;
   version: number;
   totalChunks: number;
   processedAt: string;
@@ -40,7 +41,8 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
       s3Key,
       filename = "document.txt",
       mimeType = "text/plain",
-      tenantId = "00000000-0000-0000-0000-000000000000",
+      userId,
+      tenantId,
       version = 1,
       metadata = {},
       chunkSize,
@@ -102,6 +104,7 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
       console.log(`[Worker] [Job #${job.id}] Enriching chunks with metadata...`);
       const enrichedChunks = enrichChunks({
         chunks,
+        userId,
         tenantId,
         documentId,
         version: Number(version),
@@ -140,6 +143,7 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
       const result: IngestionJobResult = {
         success: true,
         documentId,
+        userId,
         tenantId,
         version: Number(version),
         totalChunks: enrichedChunks.length,

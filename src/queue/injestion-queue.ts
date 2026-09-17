@@ -9,6 +9,7 @@ export interface IngestionJobData {
   s3Key?: string;
   filename?: string;
   mimeType?: string;
+  userId?: string;
   tenantId?: string;
   version?: number;
   source?: string;

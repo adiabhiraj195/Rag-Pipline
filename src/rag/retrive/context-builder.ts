@@ -56,7 +56,7 @@ export function buildContext(chunks: Document[], query: string): BuiltContext {
 
   const formattedBlocks = chunksInfo.map((info) => {
     const scoreStr =
-      info.relevanceScore !== null
+      info.relevanceScore !== null && info.relevanceScore !== undefined
         ? ` | Relevance: ${(info.relevanceScore * 100).toFixed(1)}%`
         : "";
     return `[Source ${info.index}: ${info.filename} (ID: ${info.chunkId}${scoreStr})]\n${info.content}`;
