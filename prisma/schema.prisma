@@ -10,33 +10,53 @@ datasource db {
   provider = "postgresql"
 }
 
-model User {
-  id           String         @id @default(uuid()) @db.Uuid
-  email        String         @unique
-  passwordHash String         @map("password_hash")
-  name         String?
-  role         String         @default("user")
-  createdAt    DateTime       @default(now()) @map("created_at")
-  updatedAt    DateTime       @default(now()) @updatedAt @map("updated_at")
+model Organisation {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  type      String?  // e.g. "Startup", "Enterprise", "Retail", "Healthcare", "Technology"
+  config    Json?    // Organisation configuration / settings
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
 
-  conversations Conversation[]
-  documents     Document[]
+  users     User[]
+  documents Document[]
+
+  @@map("organisations")
+}
+
+model User {
+  id             String        @id @default(uuid()) @db.Uuid
+  email          String        @unique
+  passwordHash   String        @map("password_hash")
+  name           String?
+  role           String        @default("Customer") // "Admin" | "Customer" | "Support Agent"
+  status         String        @default("ACTIVE")   // "ACTIVE" | "PENDING_APPROVAL" | "REJECTED"
+  isVerified     Boolean       @default(false)      @map("is_verified")
+  organisationId String?       @map("organisation_id") @db.Uuid
+  createdAt      DateTime      @default(now())      @map("created_at")
+  updatedAt      DateTime      @default(now()) @updatedAt @map("updated_at")
+
+  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  conversations  Conversation[]
+  documents      Document[]
 
   @@map("users")
 }
 
 model Document {
-  id        String   @id @db.Uuid
-  userId    String?  @map("user_id") @db.Uuid
-  filename  String
-  mimeType  String   @map("mime_type")
-  s3Key     String   @map("storage_key")
-  status    String
-  version   Int      @default(1)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  id             String        @id @db.Uuid
+  userId         String?       @map("user_id") @db.Uuid
+  organisationId String?       @map("organisation_id") @db.Uuid
+  filename       String
+  mimeType       String        @map("mime_type")
+  s3Key          String        @map("storage_key")
+  status         String
+  version        Int           @default(1)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @default(now()) @updatedAt @map("updated_at")
 
-  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@map("documents")
 }

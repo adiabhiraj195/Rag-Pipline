@@ -162,6 +162,7 @@ export async function injestFileToStore(
     // Ensure valid UUID for document ID and tenant ID (satisfies PostgreSQL UUID constraint)
     const docId = isValidUuid(documentId) ? documentId : crypto.randomUUID();
     const effectiveUserId = req.user?.userId || (isValidUuid(userId) ? userId : null);
+    const effectiveOrgId = req.user?.organisationId || (isValidUuid(tenantId) ? tenantId : null);
     const docVersion = Number(version) || 1;
     const storageKey = s3Key || docFilename;
 
@@ -172,6 +173,7 @@ export async function injestFileToStore(
         data: {
           id: docId,
           userId: effectiveUserId,
+          organisationId: effectiveOrgId,
           filename: docFilename,
           mimeType,
           s3Key: storageKey,
@@ -196,10 +198,13 @@ export async function injestFileToStore(
       filename: docFilename,
       mimeType,
       userId: effectiveUserId || undefined,
-      tenantId: isValidUuid(tenantId) ? tenantId : undefined,
+      tenantId: effectiveOrgId || (isValidUuid(tenantId) ? tenantId : undefined),
       version: docVersion,
       source: docFilename,
-      metadata,
+      metadata: {
+        ...metadata,
+        ...(effectiveOrgId ? { organisationId: effectiveOrgId } : {}),
+      },
       chunkSize: chunkSize ? Number(chunkSize) : undefined,
       chunkOverlap: chunkOverlap ? Number(chunkOverlap) : undefined,
     };

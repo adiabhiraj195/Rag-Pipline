@@ -6,12 +6,12 @@ import {
   sendMessageToConversation,
   deleteConversation,
 } from "../controller/conversation-controller";
-import { authenticateToken } from "../middleware/auth-middleware";
+import { authenticateToken, requireActiveUser } from "../middleware/auth-middleware";
 
 const conversationRouters = Router();
 
-// Protect all conversation routes with JWT authentication
-conversationRouters.use(authenticateToken);
+// Protect all conversation routes with JWT authentication and require verified/active user status
+conversationRouters.use(authenticateToken, requireActiveUser);
 
 // Conversation management
 conversationRouters.post("/", createConversation);

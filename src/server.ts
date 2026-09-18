@@ -4,6 +4,7 @@ import ragRouters from "./routers/rag-routers";
 import authRouters from "./routers/auth-routers";
 import conversationRouters from "./routers/conversation-routers";
 import cors from "cors"
+import { requestLogger } from "./middleware/logger-middleware";
 // Initialize BullMQ worker to process background jobs
 import "./worker/injestion-worker";
 
@@ -15,6 +16,9 @@ app.use(cors({
 }))
 
 app.use(express.json());
+
+// Global request logger middleware (logs every incoming request and outgoing response)
+app.use(requestLogger);
 
 // Auth routes (User registration, login, profile)
 app.use("/auth", authRouters);

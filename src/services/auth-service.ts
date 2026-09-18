@@ -4,10 +4,25 @@ import jwt from "jsonwebtoken";
 const JWT_SECRET = process.env.JWT_SECRET || "rag-secret-jwt-key-2026-production-ready";
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 
+export type UserRole = "Admin" | "Customer" | "Support Agent";
+export type UserStatus = "ACTIVE" | "PENDING_APPROVAL" | "REJECTED";
+
+export const VALID_ROLES: readonly UserRole[] = ["Admin", "Customer", "Support Agent"] as const;
+
+export function normalizeRole(roleInput?: string | null): UserRole | null {
+  if (!roleInput || typeof roleInput !== "string") return null;
+  const trimmed = roleInput.trim();
+  const found = VALID_ROLES.find((r) => r.toLowerCase() === trimmed.toLowerCase());
+  return found || null;
+}
+
 export interface TokenPayload {
   userId: string;
   email: string;
-  role: string;
+  role: UserRole | string;
+  organisationId?: string | null;
+  status: UserStatus | string;
+  isVerified?: boolean;
 }
 
 /**

@@ -30,10 +30,18 @@ Tokens are obtained via `/auth/register` or `/auth/login` and are valid for **7 
 
 ## 📑 Table of Contents
 
-1. [Authentication Endpoints](#1-authentication-endpoints)
-   - [Register User](#11-register-user) (`POST /auth/register`)
-   - [Login User](#12-login-user) (`POST /auth/login`)
-   - [Get Current User Profile](#13-get-current-user-profile) (`GET /auth/me`)
+1. [Authentication & Organisation Endpoints](#1-authentication--organisation-endpoints)
+   - [User Roles & Approval Architecture](#11-user-roles--approval-architecture)
+   - [List Public Organisations](#12-list-public-organisations) (`GET /auth/organisations`)
+   - [Unified Registration](#13-unified-registration) (`POST /auth/register`)
+   - [Register Admin with Organisation](#14-register-admin-with-organisation) (`POST /auth/register/admin`)
+   - [Register Support Agent](#15-register-support-agent) (`POST /auth/register/support-agent`)
+   - [Register Customer](#16-register-customer) (`POST /auth/register/customer`)
+   - [Login User](#17-login-user) (`POST /auth/login`)
+   - [Get Current User Profile](#18-get-current-user-profile) (`GET /auth/me`)
+   - [List Support Agents (Admin)](#19-list-support-agents-admin) (`GET /auth/organisation/support-agents`)
+   - [Approve Support Agent (Admin)](#110-approve-support-agent-admin) (`POST /auth/organisation/support-agents/:id/approve`)
+   - [Reject Support Agent (Admin)](#111-reject-support-agent-admin) (`POST /auth/organisation/support-agents/:id/reject`)
 2. [Conversation & Messaging Endpoints](#2-conversation--messaging-endpoints)
    - [Create Conversation](#21-create-conversation) (`POST /conversations`)
    - [List User Conversations](#22-list-user-conversations) (`GET /conversations`)
@@ -51,12 +59,53 @@ Tokens are obtained via `/auth/register` or `/auth/login` and are valid for **7 
 
 ---
 
-## 1. Authentication Endpoints
+## 1. Authentication & Organisation Endpoints
 
 Routes: `/auth/*` and `/api/auth/*`
 
-### 1.1 Register User
-Create a new user account and obtain an initial JWT token.
+### 1.1 User Roles & Approval Architecture
+
+The system supports a multi-tenant hierarchy with three distinct roles:
+
+| Role | Initial Status | Verified? | Description & Permissions |
+| :--- | :--- | :--- | :--- |
+| **`Admin`** | `ACTIVE` | `true` | Organisation administrator. Created together with their Organisation. Can manage organisation settings, view support agents, and **approve or reject** pending Support Agents. Has full task permissions. |
+| **`Customer`** | `ACTIVE` | `true` | End-user customer of a specified organisation. Created as active immediately. Can initiate and manage conversations, send messages, and execute RAG retrieval. |
+| **`Support Agent`** | `PENDING_APPROVAL` | `false` | Member of the support team for an organisation. **Has no permission to perform tasks until approved by an organisation Admin.** Attempting to create/manage conversations or perform tasks returns `403 Forbidden`. |
+
+---
+
+### 1.2 List Public Organisations
+Public directory of organisations available for user registration.
+
+- **Method**: `GET`
+- **Path**: `/auth/organisations` (alias: `/api/auth/organisations`)
+- **Access**: 🌐 Public
+- **Headers**: None required
+
+#### Responses
+- **`200 OK`**:
+```json
+{
+  "success": true,
+  "data": {
+    "organisations": [
+      {
+        "id": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+        "name": "Acme Technologies",
+        "type": "Technology",
+        "createdAt": "2026-09-17T18:00:00.000Z",
+        "_count": { "users": 12 }
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 1.3 Unified Registration
+Unified registration endpoint supporting all three roles (`Admin`, `Customer`, `Support Agent`).
 
 - **Method**: `POST`
 - **Path**: `/auth/register` (alias: `/api/auth/register`)
@@ -64,49 +113,169 @@ Create a new user account and obtain an initial JWT token.
 - **Headers**:
   - `Content-Type: application/json`
 
-#### Request Body
-| Field | Type | Required | Description |
+#### Request Body Schema
+| Field | Type | Required For | Description |
 | :--- | :--- | :--- | :--- |
-| `email` | `string` | **Yes** | Valid email address (must contain `@`). |
-| `password` | `string` | **Yes** | Account password (minimum 6 characters). |
-| `name` | `string` | No | User's full or display name. |
-| `role` | `string` | No | User role (defaults to `"user"`). |
+| `email` | `string` | **All** | Valid email address. |
+| `password` | `string` | **All** | Account password (min 6 characters). |
+| `name` | `string` | Optional | User's full or display name. |
+| `role` | `string` | **All** | One of: `"Admin"`, `"Customer"`, `"Support Agent"`. |
+| `organisationName` | `string` | **Admin** (or Customer / Support Agent) | Name of organisation. Creates new for Admin; matches existing for Customer / Agent. |
+| `organisationType` | `string` | Optional (Admin) | Sector/type, e.g. `"Enterprise"`, `"Startup"`, `"Healthcare"`. |
+| `organisationConfig` | `object` | Optional (Admin) | Flexible JSON settings/configuration for the organisation. |
+| `organisationId` | `string` (UUID) | **Customer / Agent** | ID of the organisation to join (alternative to `organisationName`). |
 
+#### Example 1: Admin Registration (Creates Organisation)
 ```json
 {
-  "email": "user@example.com",
+  "email": "admin@acme.com",
   "password": "SecurePassword123!",
-  "name": "Jane Doe",
-  "role": "user"
+  "name": "Alice Admin",
+  "role": "Admin",
+  "organisationName": "Acme Technologies",
+  "organisationType": "Technology",
+  "organisationConfig": {
+    "domain": "acme.com",
+    "tier": "Enterprise"
+  }
 }
 ```
 
-#### Responses
-- **`201 Created`**: Registration successful.
+**Response (`201 Created`)**:
 ```json
 {
   "success": true,
-  "message": "User registered successfully.",
+  "message": "Admin user and organisation registered successfully.",
   "data": {
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "user": {
-      "id": "c8f619b0-13d8-4fbb-a178-57796dcfbd1e",
-      "email": "user@example.com",
-      "name": "Jane Doe",
-      "role": "user",
-      "createdAt": "2026-09-17T18:20:00.000Z"
+      "id": "a1b2c3d4-0000-0000-0000-000000000001",
+      "email": "admin@acme.com",
+      "name": "Alice Admin",
+      "role": "Admin",
+      "status": "ACTIVE",
+      "isVerified": true,
+      "createdAt": "2026-09-17T20:00:00.000Z"
+    },
+    "organisation": {
+      "id": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "name": "Acme Technologies",
+      "type": "Technology",
+      "config": { "domain": "acme.com", "tier": "Enterprise" },
+      "createdAt": "2026-09-17T20:00:00.000Z"
     }
   }
 }
 ```
-- **`400 Bad Request`**: Validation failed (e.g. invalid email format or password < 6 characters).
-- **`409 Conflict`**: An account with this email address already exists.
-- **`500 Internal Server Error`**: Server error during user creation.
+
+#### Example 2: Support Agent Registration (Pending Approval)
+```json
+{
+  "email": "agent@acme.com",
+  "password": "SecurePassword123!",
+  "name": "Sam Agent",
+  "role": "Support Agent",
+  "organisationId": "7b8e90a1-4321-4fbb-9101-abcdef123456"
+}
+```
+
+**Response (`201 Created`)**:
+```json
+{
+  "success": true,
+  "message": "Support Agent registration submitted. Your account is pending approval by your organisation admin before you can perform any tasks.",
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": "b2c3d4e5-0000-0000-0000-000000000002",
+      "email": "agent@acme.com",
+      "name": "Sam Agent",
+      "role": "Support Agent",
+      "status": "PENDING_APPROVAL",
+      "isVerified": false,
+      "organisationId": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "createdAt": "2026-09-17T20:05:00.000Z"
+    },
+    "organisation": {
+      "id": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "name": "Acme Technologies",
+      "type": "Technology"
+    }
+  }
+}
+```
+
+#### Example 3: Customer Registration (Active)
+```json
+{
+  "email": "customer@client.com",
+  "password": "SecurePassword123!",
+  "name": "Cathy Customer",
+  "role": "Customer",
+  "organisationName": "Acme Technologies"
+}
+```
+
+**Response (`201 Created`)**:
+```json
+{
+  "success": true,
+  "message": "Customer registered successfully.",
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": "c3d4e5f6-0000-0000-0000-000000000003",
+      "email": "customer@client.com",
+      "name": "Cathy Customer",
+      "role": "Customer",
+      "status": "ACTIVE",
+      "isVerified": true,
+      "organisationId": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "createdAt": "2026-09-17T20:10:00.000Z"
+    },
+    "organisation": {
+      "id": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "name": "Acme Technologies",
+      "type": "Technology"
+    }
+  }
+}
+```
 
 ---
 
-### 1.2 Login User
-Authenticate existing user credentials and receive a JWT token.
+### 1.4 Register Admin with Organisation
+Dedicated shortcut endpoint for Admin onboarding.
+
+- **Method**: `POST`
+- **Path**: `/auth/register/admin` (alias: `/api/auth/register/admin`)
+- **Access**: 🌐 Public
+- Automatically assigns `role: "Admin"`. Accepts `organisationName`, `organisationType`, `organisationConfig`.
+
+---
+
+### 1.5 Register Support Agent
+Dedicated shortcut endpoint for Support Agent onboarding.
+
+- **Method**: `POST`
+- **Path**: `/auth/register/support-agent` (alias: `/api/auth/register/support-agent`)
+- **Access**: 🌐 Public
+- Automatically assigns `role: "Support Agent"` with status `PENDING_APPROVAL`. Requires `organisationId` or `organisationName`.
+
+---
+
+### 1.6 Register Customer
+Dedicated shortcut endpoint for Customer onboarding.
+
+- **Method**: `POST`
+- **Path**: `/auth/register/customer` (alias: `/api/auth/register/customer`)
+- **Access**: 🌐 Public
+- Automatically assigns `role: "Customer"` with status `ACTIVE`. Requires `organisationId` or `organisationName`.
+
+---
+
+### 1.7 Login User
+Authenticate existing credentials and receive a JWT token.
 
 - **Method**: `POST`
 - **Path**: `/auth/login` (alias: `/api/auth/login`)
@@ -115,20 +284,15 @@ Authenticate existing user credentials and receive a JWT token.
   - `Content-Type: application/json`
 
 #### Request Body
-| Field | Type | Required | Description |
-| :--- | :--- | :--- | :--- |
-| `email` | `string` | **Yes** | Registered email address. |
-| `password` | `string` | **Yes** | User password. |
-
 ```json
 {
-  "email": "user@example.com",
+  "email": "admin@acme.com",
   "password": "SecurePassword123!"
 }
 ```
 
 #### Responses
-- **`200 OK`**: Authentication successful.
+- **`200 OK`**:
 ```json
 {
   "success": true,
@@ -136,32 +300,35 @@ Authenticate existing user credentials and receive a JWT token.
   "data": {
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "user": {
-      "id": "c8f619b0-13d8-4fbb-a178-57796dcfbd1e",
-      "email": "user@example.com",
-      "name": "Jane Doe",
-      "role": "user",
-      "createdAt": "2026-09-17T18:20:00.000Z"
+      "id": "a1b2c3d4-0000-0000-0000-000000000001",
+      "email": "admin@acme.com",
+      "name": "Alice Admin",
+      "role": "Admin",
+      "status": "ACTIVE",
+      "isVerified": true,
+      "createdAt": "2026-09-17T20:00:00.000Z"
+    },
+    "organisation": {
+      "id": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "name": "Acme Technologies",
+      "type": "Technology"
     }
   }
 }
 ```
-- **`400 Bad Request`**: Missing `email` or `password`.
+- **`403 Forbidden`**: Returned if the user account status is `REJECTED`.
 - **`401 Unauthorized`**: Invalid email or password.
-- **`500 Internal Server Error`**: Server error during login.
 
 ---
 
-### 1.3 Get Current User Profile
-Fetch account details of the authenticated user.
+### 1.8 Get Current User Profile
+Fetch account and organisation details of the authenticated user.
 
 - **Method**: `GET`
 - **Path**: `/auth/me` (alias: `/api/auth/me`)
 - **Access**: 🔒 Protected (JWT required)
 - **Headers**:
   - `Authorization: Bearer <token>`
-
-#### Request Parameters
-None.
 
 #### Responses
 - **`200 OK`**:
@@ -170,20 +337,129 @@ None.
   "success": true,
   "data": {
     "user": {
-      "id": "c8f619b0-13d8-4fbb-a178-57796dcfbd1e",
-      "email": "user@example.com",
-      "name": "Jane Doe",
-      "role": "user",
-      "createdAt": "2026-09-17T18:20:00.000Z",
-      "updatedAt": "2026-09-17T18:20:00.000Z"
+      "id": "a1b2c3d4-0000-0000-0000-000000000001",
+      "email": "admin@acme.com",
+      "name": "Alice Admin",
+      "role": "Admin",
+      "status": "ACTIVE",
+      "isVerified": true,
+      "organisationId": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "createdAt": "2026-09-17T20:00:00.000Z",
+      "updatedAt": "2026-09-17T20:00:00.000Z",
+      "organisation": {
+        "id": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+        "name": "Acme Technologies",
+        "type": "Technology",
+        "config": { "domain": "acme.com" },
+        "createdAt": "2026-09-17T20:00:00.000Z"
+      }
     }
   }
 }
 ```
-- **`401 Unauthorized`**: Missing, expired, or invalid JWT.
-- **`404 Not Found`**: User not found in database.
 
 ---
+
+### 1.9 List Support Agents (Admin)
+List support agents belonging to the authenticated Admin's organisation.
+
+- **Method**: `GET`
+- **Path**: `/auth/organisation/support-agents` (alias: `/api/auth/organisation/support-agents`)
+- **Access**: 🔒 Protected (**Admin role only**)
+- **Headers**:
+  - `Authorization: Bearer <admin_token>`
+- **Query Parameters**:
+  - `status` (`string`, optional): Filter agents by status. E.g. `PENDING_APPROVAL`, `ACTIVE`, `REJECTED`, or `all`.
+
+#### Responses
+- **`200 OK`**:
+```json
+{
+  "success": true,
+  "data": {
+    "agents": [
+      {
+        "id": "b2c3d4e5-0000-0000-0000-000000000002",
+        "email": "agent@acme.com",
+        "name": "Sam Agent",
+        "role": "Support Agent",
+        "status": "PENDING_APPROVAL",
+        "isVerified": false,
+        "organisationId": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+        "createdAt": "2026-09-17T20:05:00.000Z",
+        "updatedAt": "2026-09-17T20:05:00.000Z"
+      }
+    ]
+  }
+}
+```
+- **`403 Forbidden`**: User is not an active Admin.
+
+---
+
+### 1.10 Approve Support Agent (Admin)
+Approve a pending Support Agent belonging to the authenticated Admin's organisation.
+
+- **Method**: `POST`
+- **Path**: `/auth/organisation/support-agents/:id/approve`
+- **Access**: 🔒 Protected (**Admin role only**)
+- **Headers**:
+  - `Authorization: Bearer <admin_token>`
+
+#### Responses
+- **`200 OK`**:
+```json
+{
+  "success": true,
+  "message": "Support agent approved successfully. The agent can now perform tasks.",
+  "data": {
+    "agent": {
+      "id": "b2c3d4e5-0000-0000-0000-000000000002",
+      "email": "agent@acme.com",
+      "name": "Sam Agent",
+      "role": "Support Agent",
+      "status": "ACTIVE",
+      "isVerified": true,
+      "organisationId": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "updatedAt": "2026-09-17T20:15:00.000Z"
+    }
+  }
+}
+```
+- **`403 Forbidden`**: Caller is not an Admin or attempts to approve an agent belonging to a different organisation.
+- **`404 Not Found`**: Support agent does not exist.
+
+---
+
+### 1.11 Reject Support Agent (Admin)
+Reject a pending Support Agent registration.
+
+- **Method**: `POST`
+- **Path**: `/auth/organisation/support-agents/:id/reject`
+- **Access**: 🔒 Protected (**Admin role only**)
+- **Headers**:
+  - `Authorization: Bearer <admin_token>`
+
+#### Responses
+- **`200 OK`**:
+```json
+{
+  "success": true,
+  "message": "Support agent rejected.",
+  "data": {
+    "agent": {
+      "id": "b2c3d4e5-0000-0000-0000-000000000002",
+      "email": "agent@acme.com",
+      "role": "Support Agent",
+      "status": "REJECTED",
+      "isVerified": false,
+      "organisationId": "7b8e90a1-4321-4fbb-9101-abcdef123456",
+      "updatedAt": "2026-09-17T20:16:00.000Z"
+    }
+  }
+}
+```
+- **`403 Forbidden`**: Caller is not an Admin or attempts to manage an agent belonging to another organisation.
 
 ## 2. Conversation & Messaging Endpoints
 
@@ -511,6 +787,9 @@ Deletes a conversation. All messages belonging to this conversation are automati
 
 Routes: `/rag/*` (and root `/`)
 
+> [!IMPORTANT]
+> The document upload and ingestion endpoints (`/upload-url`, `/presigned-url`, `/injestTXT`, and `/job-status/:jobId`) are restricted strictly to users with the **`Admin`** role. Calls from `Customer` or `Support Agent` roles return `403 Forbidden`. Calls without a valid Bearer token return `401 Unauthorized`.
+
 ---
 
 ### 3.1 Generate Presigned Upload URL
@@ -518,17 +797,17 @@ Generates an AWS S3 presigned `PUT` URL so client applications can upload files 
 
 - **Method**: `POST`
 - **Path**: `/rag/upload-url` (aliases: `/upload-url`, `/rag/presigned-url`, `/presigned-url`)
-- **Access**: 🌐 Public / Optional Auth (uses `req.user.userId` if provided)
+- **Access**: 🔒 Protected (**Admin role only**)
 - **Headers**:
   - `Content-Type: application/json`
-  - `Authorization: Bearer <token>` *(Optional)*
+  - `Authorization: Bearer <admin_token>`
 
 #### Request Body
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `filename` | `string` | **Yes** | Name of the file to upload (e.g. `policy.txt`). |
 | `mimeType` | `string` | No | Content MIME type (defaults to `"text/plain"`). |
-| `userId` | `string` (UUID) | No | Scopes the storage path to a user (defaults to JWT user or `"general"`). |
+| `userId` | `string` (UUID) | No | Scopes storage path to user (defaults to authenticated Admin's `userId`). |
 | `expiresIn` | `number` | No | URL expiration time in seconds (default: `3600`). |
 
 ```json
@@ -558,18 +837,20 @@ Generates an AWS S3 presigned `PUT` URL so client applications can upload files 
 }
 ```
 - **`400 Bad Request`**: Missing `filename`.
+- **`401 Unauthorized`**: Missing or invalid JWT Bearer token.
+- **`403 Forbidden`**: Authenticated user is not an Admin.
 
 ---
 
 ### 3.2 Queue Document Ingestion
-Registers a document record in PostgreSQL and enqueues an asynchronous background job in BullMQ to download the file from S3, split it into chunks, enrich chunks with metadata, compute embeddings, and store them into the Redis Vector Store.
+Registers a document record in PostgreSQL (attributing to the Admin's `userId` and `organisationId`) and enqueues an asynchronous background job in BullMQ to download the file from S3, split it into chunks, enrich chunks with metadata, compute embeddings, and store them into the Redis Vector Store.
 
 - **Method**: `POST`
 - **Path**: `/rag/injestTXT` (alias: `/injestTXT`)
-- **Access**: 🌐 Public / Optional Auth
+- **Access**: 🔒 Protected (**Admin role only**)
 - **Headers**:
   - `Content-Type: application/json`
-  - `Authorization: Bearer <token>` *(Optional)*
+  - `Authorization: Bearer <admin_token>`
 
 #### Request Body
 | Field | Type | Required | Description |
@@ -578,7 +859,7 @@ Registers a document record in PostgreSQL and enqueues an asynchronous backgroun
 | `filename` | `string` | No | Original filename (default: basename of `s3Key`). |
 | `mimeType` | `string` | No | File MIME type (default: `"text/plain"`). |
 | `documentId` | `string` (UUID) | No | Custom UUID for the document (auto-generated if omitted). |
-| `userId` | `string` (UUID) | No | Owner user ID (derived from JWT if authenticated). |
+| `userId` | `string` (UUID) | No | Owner user ID (derived from authenticated Admin). |
 | `version` | `number` | No | Version number (defaults to `1`). |
 | `chunkSize` | `number` | No | Token/character size for chunk splitting. |
 | `chunkOverlap` | `number` | No | Overlap between consecutive chunks. |
@@ -614,6 +895,8 @@ Registers a document record in PostgreSQL and enqueues an asynchronous backgroun
 }
 ```
 - **`400 Bad Request`**: Missing `s3Key`.
+- **`401 Unauthorized`**: Missing or invalid JWT Bearer token.
+- **`403 Forbidden`**: Authenticated user is not an Admin.
 - **`500 Internal Server Error`**: Database or Redis queue failure.
 
 ---
@@ -623,8 +906,9 @@ Check the status, progress percentage, and results of an ongoing or completed do
 
 - **Method**: `GET`
 - **Path**: `/rag/job-status/:jobId` (alias: `/job-status/:jobId`)
-- **Access**: 🌐 Public
-- **Headers**: None required.
+- **Access**: 🔒 Protected (**Admin role only**)
+- **Headers**:
+  - `Authorization: Bearer <admin_token>`
 
 #### Path Parameters
 | Parameter | Type | Required | Description |
@@ -655,6 +939,8 @@ Check the status, progress percentage, and results of an ongoing or completed do
   }
 }
 ```
+- **`401 Unauthorized`**: Missing or invalid JWT Bearer token.
+- **`403 Forbidden`**: Authenticated user is not an Admin.
 - **`404 Not Found`**: Job ID does not exist in Redis queue.
 
 ---
@@ -773,17 +1059,25 @@ Check server liveness and current timestamp.
 
 | Category | Method | Endpoint | Access | Summary |
 | :--- | :--- | :--- | :--- | :--- |
-| **Auth** | `POST` | `/auth/register` | Public | Register new user and get JWT |
+| **Auth** | `GET` | `/auth/organisations` | Public | List available organisations |
+| **Auth** | `POST` | `/auth/register` | Public | Unified registration (Admin, Agent, Customer) |
+| **Auth** | `POST` | `/auth/register/admin` | Public | Register Admin and create Organisation |
+| **Auth** | `POST` | `/auth/register/support-agent` | Public | Register Support Agent (Pending approval) |
+| **Auth** | `POST` | `/auth/register/customer` | Public | Register Customer for an organisation |
 | **Auth** | `POST` | `/auth/login` | Public | Authenticate user and get JWT |
-| **Auth** | `GET` | `/auth/me` | Protected | Fetch current user profile |
-| **Conversations** | `POST` | `/conversations` | Protected | Start a new conversation |
-| **Conversations** | `GET` | `/conversations` | Protected | List user's conversations |
-| **Conversations** | `GET` | `/conversations/:id` | Protected | Get conversation with messages |
-| **Conversations** | `POST` | `/conversations/:id/messages`| Protected | Send message, run RAG & persist |
-| **Conversations** | `DELETE`| `/conversations/:id` | Protected | Delete conversation & messages |
-| **Ingestion** | `POST` | `/rag/upload-url` | Public/Auth | Get S3 presigned upload URL |
-| **Ingestion** | `POST` | `/rag/injestTXT` | Public/Auth | Queue file ingestion into Redis |
-| **Ingestion** | `GET` | `/rag/job-status/:jobId` | Public | Check status of ingestion job |
+| **Auth** | `GET` | `/auth/me` | Protected | Fetch profile and organisation details |
+| **Admin** | `GET` | `/auth/organisation/support-agents` | Protected (Admin) | List support agents for organisation |
+| **Admin** | `POST` | `/auth/organisation/support-agents/:id/approve` | Protected (Admin) | Approve pending support agent |
+| **Admin** | `POST` | `/auth/organisation/support-agents/:id/reject` | Protected (Admin) | Reject pending support agent |
+| **Conversations** | `POST` | `/conversations` | Protected (Active) | Start a new conversation |
+| **Conversations** | `GET` | `/conversations` | Protected (Active) | List user's conversations |
+| **Conversations** | `GET` | `/conversations/:id` | Protected (Active) | Get conversation with messages |
+| **Conversations** | `POST` | `/conversations/:id/messages`| Protected (Active) | Send message, run RAG & persist |
+| **Conversations** | `DELETE`| `/conversations/:id` | Protected (Active) | Delete conversation & messages |
+| **Ingestion** | `POST` | `/rag/upload-url` | Protected (Admin) | Get S3 presigned upload URL |
+| **Ingestion** | `POST` | `/rag/injestTXT` | Protected (Admin) | Queue file ingestion into Redis |
+| **Ingestion** | `GET` | `/rag/job-status/:jobId` | Protected (Admin) | Check status of ingestion job |
 | **Chat** | `POST` | `/rag/chat` | Public/Auth | Stateless RAG retrieval & LLM |
 | **System** | `GET` | `/health` | Public | Server health check |
+
 
