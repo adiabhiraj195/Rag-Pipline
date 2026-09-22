@@ -11,7 +11,8 @@
     "test": "tsx src/test-smoke.ts",
     "test:retrieval": "tsx src/test-retrieval.ts",
     "dev": "tsx watch src/server.ts",
-    "build": "tsc"
+    "build": "prisma generate && tsc",
+    "start": "tsx src/server.ts"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -20,8 +21,6 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.5.1",
     "@types/pg": "^8.23.1",
-    "prisma": "^7.10.0",
-    "tsx": "^4.23.13",
     "typescript": "^7.0.2"
   },
   "dependencies": {
@@ -42,7 +41,9 @@
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0",
+    "prisma": "^7.10.0",
     "redis": "^6.2.1",
+    "tsx": "^4.23.13",
     "zod": "^4.6.5"
   }
 }
