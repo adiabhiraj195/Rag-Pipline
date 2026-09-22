@@ -105,6 +105,34 @@ async function runTests() {
   console.log("✓ RRF correctly merged rankings and scored intersecting documents highest.");
 
   console.log("\n=== 3. Testing Context Builder ===");
+  // Test enriched chunk with context, summary, and embeddingText
+  const enrichedDoc = new Document({
+    pageContent: "Actual raw chunk content for answering the question.",
+    metadata: {
+      chunkId: "chunk-enriched-1",
+      filename: "guide.txt",
+      context: "Located in Introduction section of guide.txt",
+      summary: "Introduces RAG pipeline concepts concisely.",
+      embeddingText: "Context: Located in Introduction...\n\nSummary: Introduces RAG...\n\nContent:\nActual raw chunk content for answering the question.",
+      relevanceScore: 0.95,
+    },
+  });
+
+  const builtWithEnriched = buildContext([enrichedDoc], "What is the pipeline?");
+  if (builtWithEnriched.chunksInfo[0].context !== "Located in Introduction section of guide.txt") {
+    throw new Error("Context builder failed to expose 'context' in chunksInfo.");
+  }
+  if (builtWithEnriched.chunksInfo[0].summary !== "Introduces RAG pipeline concepts concisely.") {
+    throw new Error("Context builder failed to expose 'summary' in chunksInfo.");
+  }
+  if (builtWithEnriched.chunksInfo[0].content !== "Actual raw chunk content for answering the question.") {
+    throw new Error("Context builder content does not match actual raw chunk content.");
+  }
+  if (builtWithEnriched.formattedContext.includes("embeddingText") || !builtWithEnriched.formattedContext.includes("Actual raw chunk content for answering the question.")) {
+    throw new Error("Context builder must feed pure raw chunk content to the LLM, not composite embeddingText.");
+  }
+  console.log("✓ Context builder preserved raw chunk content for LLM prompt and surfaced context & summary in chunksInfo.");
+
   const built = buildContext(fused, "How does the search pipeline work?");
   if (!built.formattedContext.includes("[Source 1: redis.txt")) {
     throw new Error("Context builder failed to format source blocks properly.");

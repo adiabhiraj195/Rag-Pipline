@@ -6,6 +6,8 @@ export interface ContextChunkInfo {
   filename?: string;
   relevanceScore?: number | null;
   content: string;
+  context?: string;
+  summary?: string;
 }
 
 export interface BuiltContext {
@@ -38,13 +40,15 @@ export function buildContext(chunks: Document[], query: string): BuiltContext {
       filename,
       relevanceScore,
       content: chunk.pageContent.trim(),
+      context: chunk.metadata?.context,
+      summary: chunk.metadata?.summary,
     };
   });
 
   if (chunksInfo.length === 0) {
     const systemPrompt =
-      "You are a helpful and precise assistant. Answer the user's questions truthfully and accurately.";
-    const userPrompt = `User Question: ${query}\n\nNote: No relevant documents were found in the knowledge base. Please answer with general knowledge or state that no specific documentation is available.`;
+      "You are a helpful and precise assistant. Answer the user's questions truthfully and accurately.\n\nNote: No relevant documents were found in the knowledge base. Please answer with state that no specific documentation is available.";
+    const userPrompt = `User Question: ${query}`;
 
     return {
       formattedContext: "No context chunks retrieved.",

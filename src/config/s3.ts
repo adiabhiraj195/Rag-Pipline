@@ -3,6 +3,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -99,4 +100,46 @@ export async function downloadFileContentFromS3(
   }
 
   return await response.Body.transformToString("utf-8");
+}
+
+export interface PresignedDownloadUrlOptions {
+  key: string;
+  expiresIn?: number; // In seconds, default 3600
+  bucket?: string;
+  filename?: string;
+}
+
+/**
+ * Generates a presigned GET URL allowing clients to download/view a file directly from S3.
+ */
+export async function generatePresignedDownloadUrl({
+  key,
+  expiresIn = 3600,
+  bucket = getS3BucketName(),
+  filename,
+}: PresignedDownloadUrlOptions): Promise<string> {
+  const command = new GetObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    ResponseContentDisposition: filename
+      ? `inline; filename="${encodeURIComponent(filename)}"`
+      : undefined,
+  });
+
+  return await getSignedUrl(s3Client, command, { expiresIn });
+}
+
+/**
+ * Deletes a file object from S3.
+ */
+export async function deleteFileFromS3(
+  s3Key: string,
+  bucket = getS3BucketName()
+): Promise<void> {
+  const command = new DeleteObjectCommand({
+    Bucket: bucket,
+    Key: s3Key,
+  });
+
+  await s3Client.send(command);
 }

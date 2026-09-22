@@ -14,6 +14,7 @@ import {
 } from "../rag/injestion/load-document";
 import { enrichChunks } from "../rag/injestion/enrich-chunks";
 import { getVectorStore } from "../vector/vector-store";
+import { embeddingModel } from "../llm/model";
 import { downloadFileContentFromS3 } from "../config/s3";
 import { prisma } from "../config/prisma";
 import type { Document } from "@langchain/classic/document";
@@ -68,10 +69,11 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
       // Step 1: Download / Load file content
       await job.updateProgress(15);
       let loadedDocs: Document[];
+      let textContent = "";
 
       if (s3Key) {
         console.log(`[Worker] [Job #${job.id}] Downloading file content from S3 (Key: ${s3Key})...`);
-        const textContent = await downloadFileContentFromS3(s3Key);
+        textContent = await downloadFileContentFromS3(s3Key);
         // console.log(`[Worker] [Job #${job.id}] Downloaded Content : ${textContent}`)
         console.log(`[Worker] [Job #${job.id}] Successfully downloaded ${textContent.length} characters from S3.`);
 
@@ -99,15 +101,16 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
         throw new Error(`Document splitting produced 0 chunks for source: ${fileSource}`);
       }
 
-      // Step 3: Enrich chunks with metadata
+      // Step 3: Enrich chunks with metadata, LLM context, summary, and embeddingText
       await job.updateProgress(55);
-      console.log(`[Worker] [Job #${job.id}] Enriching chunks with metadata...`);
-      const enrichedChunks = enrichChunks({
+      console.log(`[Worker] [Job #${job.id}] Enriching chunks with metadata, context, and summary...`);
+      const enrichedChunks = await enrichChunks({
         chunks,
         userId,
         tenantId,
         documentId,
         version: Number(version),
+        documentContent: textContent,
         customMetadata: {
           ...metadata,
           filename,
@@ -122,9 +125,19 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
       const vectorStore = await getVectorStore();
 
       console.log(
-        `[Worker] [Job #${job.id}] Generating embeddings and indexing ${enrichedChunks.length} chunks into Redis...`
+        `[Worker] [Job #${job.id}] Generating embeddings from embeddingText (context + summary + content) and indexing ${enrichedChunks.length} chunks into Redis...`
       );
-      await vectorStore.addDocuments(enrichedChunks);
+      const textsToEmbed = enrichedChunks.map(
+        (chunk) => (chunk.metadata?.embeddingText as string) || chunk.pageContent
+      );
+      const vectors = await embeddingModel.embedDocuments(textsToEmbed);
+      const indexName = process.env.REDIS_INDEX || "rag_chunks";
+      const keyPrefix = `doc:${indexName}:`;
+      const chunkKeys = enrichedChunks.map(
+        (_, idx) => `${keyPrefix}${documentId}:${idx}`
+      );
+      await vectorStore.addVectors(vectors, enrichedChunks, { keys: chunkKeys });
+
 
       // Step 5: Update document status in PostgreSQL to COMPLETED
       await job.updateProgress(90);

@@ -63,7 +63,7 @@ async function main() {
   });
   console.log(`✓ Document split into ${chunks.length} chunks using custom chunkSize=50, chunkOverlap=10.`);
 
-  const enriched = enrichChunks({
+  const enriched = await enrichChunks({
     chunks,
     documentId: "c28f64e2-d3ab-41c3-8f0b-2200dc890288",
     tenantId: "00000000-0000-0000-0000-000000000000",
@@ -73,6 +73,7 @@ async function main() {
       filename: "test.txt",
       mimeType: "text/plain",
     },
+    generateContextAndSummary: false,
   });
 
   const ids = new Set<string>();
@@ -83,14 +84,32 @@ async function main() {
     ids.add(c.metadata.chunkId);
   }
   console.log(`✓ All ${ids.size} chunks have distinct chunk IDs without collision.`);
-  console.log(`✓ First chunk metadata sample:`, {
+
+  // Verify context, summary, and embeddingText fields
+  if (!enriched[0].metadata.context || typeof enriched[0].metadata.context !== "string") {
+    throw new Error("Missing or invalid 'context' field in enriched chunk metadata.");
+  }
+  if (!enriched[0].metadata.summary || typeof enriched[0].metadata.summary !== "string") {
+    throw new Error("Missing or invalid 'summary' field in enriched chunk metadata.");
+  }
+  if (
+    !enriched[0].metadata.embeddingText ||
+    !enriched[0].metadata.embeddingText.includes("Context:") ||
+    !enriched[0].metadata.embeddingText.includes("Summary:") ||
+    !enriched[0].metadata.embeddingText.includes("Content:")
+  ) {
+    throw new Error("Missing or malformed 'embeddingText' combining context, summary, and content.");
+  }
+  if (enriched[0].pageContent !== chunks[0].pageContent) {
+    throw new Error("Chunk pageContent was modified; must preserve raw chunk content for LLM retrieval.");
+  }
+
+  console.log(`✓ Chunk enrichment successfully generated context, summary, and embeddingText:`, {
     chunkId: enriched[0].metadata.chunkId,
-    chunkIndex: enriched[0].metadata.chunkIndex,
-    totalChunks: enriched[0].metadata.totalChunks,
-    documentId: enriched[0].metadata.documentId,
-    tenantId: enriched[0].metadata.tenantId,
-    s3Key: enriched[0].metadata.s3Key,
-    mimeType: enriched[0].metadata.mimeType,
+    context: enriched[0].metadata.context,
+    summary: enriched[0].metadata.summary,
+    embeddingTextSnippet: enriched[0].metadata.embeddingText.slice(0, 100) + "...",
+    pageContentSnippet: enriched[0].pageContent.slice(0, 50) + "...",
   });
 
   console.log("\n=== 2. Testing Controller Validation & Presigned URL Generation ===");
