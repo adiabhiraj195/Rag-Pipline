@@ -3,9 +3,11 @@ import { prisma } from "../config/prisma";
 import {
   generatePresignedDownloadUrl,
   downloadFileContentFromS3,
+  downloadFileBufferFromS3,
   deleteFileFromS3,
 } from "../config/s3";
 import { deleteDocumentFromVectorStore } from "../vector/vector-store";
+import { isPdfDocument, loadPdfFromBuffer } from "../rag/injestion/load-document";
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -227,9 +229,21 @@ export async function getDocumentContent(
 
     let content = "";
     try {
-      content = await downloadFileContentFromS3(document.s3Key);
+      const isPdf =
+        isPdfDocument(document.filename, document.mimeType) ||
+        isPdfDocument(document.s3Key);
+
+      if (isPdf) {
+        const buffer = await downloadFileBufferFromS3(document.s3Key);
+        const parsed = await loadPdfFromBuffer(buffer, {
+          filename: document.filename,
+        });
+        content = parsed.fullText;
+      } else {
+        content = await downloadFileContentFromS3(document.s3Key);
+      }
     } catch (s3Error: any) {
-      console.error("[Document Content - S3 Fetch Error]", s3Error);
+      console.error("[Document Content - Fetch Error]", s3Error);
       res.status(502).json({
         success: false,
         error: `Failed to download file from S3 storage: ${s3Error.message}`,

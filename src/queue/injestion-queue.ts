@@ -16,6 +16,8 @@ export interface IngestionJobData {
   metadata?: Record<string, any>;
   chunkSize?: number;
   chunkOverlap?: number;
+  chunkingStrategy?: string;
+  chunkingType?: string;
 }
 
 export const ingestionQueue = new Queue<IngestionJobData>(INGESTION_QUEUE_NAME, {

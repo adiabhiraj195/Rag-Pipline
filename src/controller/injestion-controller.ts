@@ -5,6 +5,12 @@ import type { Request, Response } from "express";
 import { ingestionQueue, IngestionJobData } from "../queue/injestion-queue";
 import { generatePresignedUploadUrl } from "../config/s3";
 import { prisma } from "../config/prisma";
+import {
+  resolveChunkingStrategy,
+  listChunkingMethods,
+  ChunkingStrategy,
+} from "../rag/chunking";
+import { isPdfDocument } from "../rag/injestion/load-document";
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -27,7 +33,7 @@ export async function createPresignedUrl(
   try {
     const {
       filename,
-      mimeType = "text/plain",
+      mimeType,
       userId,
       tenantId,
       expiresIn = 3600,
@@ -42,13 +48,16 @@ export async function createPresignedUrl(
     }
 
     const sanitizedFilename = path.basename(filename.trim());
+    const isPdf = isPdfDocument(sanitizedFilename, mimeType);
+    const effectiveMimeType = mimeType || (isPdf ? "application/pdf" : "text/plain");
+
     const randomPrefix = crypto.randomUUID();
     const effectiveUserId = req.user?.userId || (isValidUuid(userId) ? userId : (isValidUuid(tenantId) ? tenantId : "general"));
     const s3Key = `uploads/${effectiveUserId}/${randomPrefix}-${sanitizedFilename}`;
 
     const presignedData = await generatePresignedUploadUrl({
       key: s3Key,
-      contentType: mimeType,
+      contentType: effectiveMimeType,
       expiresIn: Number(expiresIn) || 3600,
     });
 
@@ -61,7 +70,7 @@ export async function createPresignedUrl(
         bucket: presignedData.bucket,
         expiresIn: presignedData.expiresIn,
         filename: sanitizedFilename,
-        mimeType,
+        mimeType: effectiveMimeType,
       },
     });
   } catch (error: any) {
@@ -74,14 +83,16 @@ export async function createPresignedUrl(
 }
 
 /**
- * Controller to ingest a text document.
- * Accepts s3Key and file metadata, persists document record in PostgreSQL DB via Prisma,
- * and adds the job to the BullMQ ingestion queue.
- * POST /injestTXT
+ * Controller to ingest a document (text or PDF).
+ * Accepts s3Key, file metadata, and user-selected chunking strategy (e.g. 'recursive' or 'structure_aware'),
+ * persists document record in PostgreSQL DB via Prisma, and adds the job to the BullMQ ingestion queue.
+ * POST /injestTXT (or /injest /ingest)
  * Body: {
  *   s3Key: string,
  *   filename: string,
  *   mimeType?: string,
+ *   chunkingStrategy?: "recursive" | "structure_aware",
+ *   chunkingType?: "recursive" | "structure_aware",
  *   documentId?: string (UUID),
  *   tenantId?: string (UUID),
  *   version?: number,
@@ -98,7 +109,7 @@ export async function injestFileToStore(
     const {
       s3Key,
       filename,
-      mimeType = "text/plain",
+      mimeType,
       documentId,
       userId,
       tenantId,
@@ -106,6 +117,8 @@ export async function injestFileToStore(
       metadata = {},
       chunkSize,
       chunkOverlap,
+      chunkingStrategy,
+      chunkingType,
     } = req.body;
 
     // Validate either s3Key or local filePath is provided
@@ -133,6 +146,30 @@ export async function injestFileToStore(
         error: "'filename' is required when ingesting with s3Key.",
       });
       return;
+    }
+
+    // Determine MIME type with PDF auto-detection
+    const isPdf = isPdfDocument(docFilename, mimeType);
+    const effectiveMimeType =
+      mimeType && mimeType !== "text/plain"
+        ? mimeType
+        : isPdf
+        ? "application/pdf"
+        : mimeType || "text/plain";
+
+    // Validate and resolve user-selected chunking strategy
+    const rawStrategy = chunkingStrategy || chunkingType;
+    let effectiveChunkingStrategy: ChunkingStrategy = "recursive";
+    if (rawStrategy !== undefined && rawStrategy !== null && rawStrategy !== "") {
+      try {
+        effectiveChunkingStrategy = resolveChunkingStrategy(String(rawStrategy));
+      } catch (strategyError: any) {
+        res.status(400).json({
+          success: false,
+          error: strategyError.message,
+        });
+        return;
+      }
     }
 
     // Validate optional chunkSize
@@ -173,7 +210,7 @@ export async function injestFileToStore(
           id: docId,
           userId: effectiveUserId,
           filename: docFilename,
-          mimeType,
+          mimeType: effectiveMimeType,
           s3Key: storageKey,
           status: "PENDING",
           version: docVersion,
@@ -189,19 +226,24 @@ export async function injestFileToStore(
       return;
     }
 
-    // 2. Queue BullMQ job
+    // 2. Queue BullMQ job with chunkingStrategy
     const jobPayload: IngestionJobData = {
       documentId: docId,
       s3Key: s3Key || undefined,
       filename: docFilename,
-      mimeType,
+      mimeType: effectiveMimeType,
       userId: effectiveUserId || undefined,
       tenantId: isValidUuid(tenantId) ? tenantId : undefined,
       version: docVersion,
       source: docFilename,
-      metadata,
+      metadata: {
+        ...metadata,
+        chunkingStrategy: effectiveChunkingStrategy,
+      },
       chunkSize: chunkSize ? Number(chunkSize) : undefined,
       chunkOverlap: chunkOverlap ? Number(chunkOverlap) : undefined,
+      chunkingStrategy: effectiveChunkingStrategy,
+      chunkingType: effectiveChunkingStrategy,
     };
 
     const job = await ingestionQueue.add("ingest-txt-file", jobPayload);
@@ -214,11 +256,12 @@ export async function injestFileToStore(
         queueName: ingestionQueue.name,
         documentId: docId,
         filename: docFilename,
-        mimeType,
+        mimeType: effectiveMimeType,
         s3Key: storageKey,
         status: dbRecord.status,
         chunkSize: jobPayload.chunkSize,
         chunkOverlap: jobPayload.chunkOverlap,
+        chunkingStrategy: effectiveChunkingStrategy,
       },
     });
   } catch (error: any) {
@@ -278,6 +321,32 @@ export async function getJobStatus(
     res.status(500).json({
       success: false,
       error: error?.message || "Internal server error while fetching job status.",
+    });
+  }
+}
+
+/**
+ * Controller to list available chunking strategies and options.
+ * GET /chunking-strategies (or /rag/chunking-strategies)
+ */
+export async function getChunkingStrategies(
+  _req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const strategies = listChunkingMethods();
+    res.status(200).json({
+      success: true,
+      data: {
+        strategies,
+        default: "recursive",
+      },
+    });
+  } catch (error: any) {
+    console.error("[Chunking Strategies Error]", error);
+    res.status(500).json({
+      success: false,
+      error: error?.message || "Internal server error fetching chunking strategies.",
     });
   }
 }

@@ -53,8 +53,9 @@ Authorization: Bearer <your_jwt_token>
 4. [Document Ingestion Pipeline](#4-document-ingestion-pipeline)
    - [4.1 Generate Presigned Upload URL](#41-generate-presigned-upload-url) (`POST /rag/upload-url`)
    - [4.2 Direct S3 File Upload](#42-direct-s3-file-upload) (`PUT <presignedUrl>`)
-   - [4.3 Queue Ingestion Job](#43-queue-ingestion-job) (`POST /rag/injestTXT`)
-   - [4.4 Check Ingestion Job Status](#44-check-ingestion-job-status) (`GET /rag/job-status/:jobId`)
+   - [4.3 Get Available Chunking Strategies](#43-get-available-chunking-strategies) (`GET /rag/chunking-strategies`)
+   - [4.4 Queue Ingestion Job (Text & PDF)](#44-queue-ingestion-job-text--pdf) (`POST /rag/injestTXT`, `/rag/injest`, `/rag/ingest`)
+   - [4.5 Check Ingestion Job Status](#45-check-ingestion-job-status) (`GET /rag/job-status/:jobId`)
 5. [Stateless Chat & Retrieval Endpoint](#5-stateless-chat--retrieval-endpoint)
    - [5.1 Stateless Hybrid RAG Query](#51-stateless-hybrid-rag-query) (`POST /rag/chat`)
 6. [System Health](#6-system-health)
@@ -700,28 +701,62 @@ await fetch(presignedUrl, {
 
 ---
 
-### 4.3 Queue Ingestion Job
-Notify the backend that the file is in S3 and queue the background parsing, chunking, enrichment, vector embedding, and Redis indexing job.
+### 4.3 Get Available Chunking Strategies
+Inspect the chunking methods registered in the ingestion pipeline.
+
+- **Method**: `GET`
+- **Path**: `/rag/chunking-strategies` (alias: `/chunking-strategies`, `/rag/chunking-methods`)
+- **Access**: 🌐 Public
+
+#### Responses
+- **`200 OK`**:
+```json
+{
+  "success": true,
+  "data": {
+    "strategies": [
+      {
+        "name": "recursive",
+        "displayName": "Recursive Character Splitter",
+        "description": "Splits text recursively by paragraphs (\\n\\n), lines (\\n), sentences, and words based on character count."
+      },
+      {
+        "name": "structure_aware",
+        "displayName": "Structure-Aware Chunker",
+        "description": "Understands document hierarchy (headings, sections, lists, tables, and PDF pages) and preserves structural context for each chunk."
+      }
+    ],
+    "default": "recursive"
+  }
+}
+```
+
+---
+
+### 4.4 Queue Ingestion Job (Text & PDF)
+Notify the backend that the file is in S3 and queue background document parsing (supports both plain text and PDF formats), user-selected chunking strategy (`recursive` or `structure_aware`), chunk enrichment, vector embedding, and Redis indexing.
 
 - **Method**: `POST`
-- **Path**: `/rag/injestTXT` (alias: `/injestTXT`)
+- **Path**: `/rag/injestTXT` (aliases: `/injest`, `/ingest`, `/injestTXT`)
 - **Access**: 🌐 Public / Optional Auth
 
 #### Request Body
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `s3Key` | `string` | **Yes** | The `s3Key` returned in step 4.1. |
-| `filename` | `string` | **Yes** | File display name. |
-| `mimeType` | `string` | No | File MIME type (default: `"text/plain"`). |
-| `chunkSize` | `number` | No | Chunk size in characters (default `800`). |
-| `chunkOverlap` | `number` | No | Overlap in characters (default `100`). |
+| `filename` | `string` | **Yes** | File display name (e.g. `"annual-report.pdf"` or `"manual.txt"`). |
+| `mimeType` | `string` | No | File MIME type (default: `"application/pdf"` if `.pdf`, else `"text/plain"`). |
+| `chunkingStrategy` | `string` | No | Chunking method: `"recursive"` or `"structure_aware"` (alias: `chunkingType`, default: `"recursive"`). |
+| `chunkSize` | `number` | No | Target chunk size in characters (default: `800`). |
+| `chunkOverlap` | `number` | No | Overlap in characters between chunks (default: `100`). |
 | `metadata` | `object` | No | Custom JSON key-values attached to all chunks. |
 
 ```json
 {
-  "s3Key": "uploads/general/uuid-handbook.txt",
-  "filename": "employee-handbook-2026.txt",
-  "mimeType": "text/plain",
+  "s3Key": "uploads/general/uuid-annual-report.pdf",
+  "filename": "annual-report-2025.pdf",
+  "mimeType": "application/pdf",
+  "chunkingStrategy": "structure_aware",
   "chunkSize": 800,
   "chunkOverlap": 100
 }
@@ -735,21 +770,23 @@ Notify the backend that the file is in S3 and queue the background parsing, chun
   "message": "Document ingestion job queued successfully.",
   "data": {
     "jobId": "14",
-    "queueName": "document-ingestion",
+    "queueName": "txt-ingestion-queue",
     "documentId": "48805a5b-93ff-4076-a077-40ff1100f913",
-    "filename": "employee-handbook-2026.txt",
-    "mimeType": "text/plain",
-    "s3Key": "uploads/general/uuid-handbook.txt",
+    "filename": "annual-report-2025.pdf",
+    "mimeType": "application/pdf",
+    "s3Key": "uploads/general/uuid-annual-report.pdf",
     "status": "PENDING",
     "chunkSize": 800,
-    "chunkOverlap": 100
+    "chunkOverlap": 100,
+    "chunkingStrategy": "structure_aware"
   }
 }
 ```
+- **`400 Bad Request`**: If an invalid `chunkingStrategy` is passed (e.g. `"unsupported"`), returns list of supported strategies.
 
 ---
 
-### 4.4 Check Ingestion Job Status
+### 4.5 Check Ingestion Job Status
 Check the progress and status of a running background ingestion job.
 
 - **Method**: `GET`
