@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { runRetrievalPipeline } from "../rag/retrive/retrieval-pipeline";
 import { rewriteQuery } from "../services/query-rewriting";
+import { groqModel } from "../llm/model";
 
 /**
  * Controller to handle chat queries using hybrid retrieval (Dense Semantic + Lexical + RRF + ReRanker + LLM).
@@ -90,18 +91,39 @@ export async function handleChatQuery(
       `[Chat Controller] Passing optimal query to retrieval pipeline: "${optimalQuery}"`
     );
 
-    const result = await runRetrievalPipeline(optimalQuery, {
+    const retrievalResult = await runRetrievalPipeline(optimalQuery, {
       topK: topK ? Number(topK) : undefined,
       rrfK: rrfK ? Number(rrfK) : undefined,
       tenantId: tenantId ? String(tenantId) : undefined,
       history: normalizedHistory,
     });
 
+    // Step 3: Invoke LLM with retrieved grounded context and conversation history
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: retrievalResult.systemPrompt },
+    ];
+
+    for (const msg of normalizedHistory) {
+      if (msg.role === "user" || msg.role === "assistant") {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    messages.push({ role: "user", content: retrievalResult.userPrompt });
+
+    console.log(`[Chat Controller] Invoking LLM for final generation...`);
+    const llmResponse = await groqModel.invoke(messages);
+    const answer =
+      typeof llmResponse.content === "string"
+        ? llmResponse.content
+        : JSON.stringify(llmResponse.content);
+
     res.status(200).json({
       success: true,
       message: "Chat query processed successfully.",
       data: {
-        ...result,
+        ...retrievalResult,
+        answer,
         originalQuery: query,
         rewrittenQuery: optimalQuery,
         queryRewriteStatus: rewriteResult.status,

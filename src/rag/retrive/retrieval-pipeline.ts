@@ -1,10 +1,8 @@
-import { Document } from "@langchain/classic/document";
 import { semanticSearch } from "./semantic-search";
 import { lexicalSearch } from "./lexical-search";
 import { reciprocalRankFusion } from "./rrf";
 import { rerankDocuments } from "./reranker";
 import { buildContext, ContextChunkInfo } from "./context-builder";
-import { groqModel } from "../../llm/model";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -30,9 +28,11 @@ export interface RetrievalPipelineOptions {
 
 export interface RetrievalPipelineResult {
   query: string;
-  answer: string;
   sources: ContextChunkInfo[];
   context: string;
+  systemPrompt: string;
+  userPrompt: string;
+  answer?: string;
   pipelineStats: {
     semanticRetrieved: number;
     lexicalRetrieved: number;
@@ -51,7 +51,6 @@ export interface RetrievalPipelineResult {
  * 3. Reciprocal Rank Fusion (RRF) to blend rankings
  * 4. Cross-Encoder ReRanking with Cohere
  * 5. Context Builder for grounded prompt construction
- * 6. Groq LLM inference
  */
 export async function runRetrievalPipeline(
   query: string,
@@ -120,36 +119,15 @@ export async function runRetrievalPipeline(
     trimmedQuery
   );
 
-  // Step 6: Construct messages for Groq LLM
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-    { role: "system", content: systemPrompt },
-  ];
-
-  if (options.history && Array.isArray(options.history)) {
-    for (const msg of options.history) {
-      if (msg.role === "user" || msg.role === "assistant") {
-        messages.push({ role: msg.role, content: msg.content });
-      }
-    }
-  }
-
-  messages.push({ role: "user", content: userPrompt });
-
-  // Call LLM
-  console.log(`[Retrieval Pipeline] Invoking LLM for final generation...`);
-  const llmResponse = await groqModel.invoke(messages);
-  const answer = typeof llmResponse.content === "string"
-    ? llmResponse.content
-    : JSON.stringify(llmResponse.content);
-
   const durationMs = Date.now() - startTime;
-  console.log(`[Retrieval Pipeline] Pipeline completed in ${durationMs}ms.`);
+  console.log(`[Retrieval Pipeline] Pipeline completed in ${durationMs}ms with ${chunksInfo.length} sources.`);
 
   return {
     query: trimmedQuery,
-    answer,
     sources: chunksInfo,
     context: formattedContext,
+    systemPrompt,
+    userPrompt,
     pipelineStats: {
       semanticRetrieved: semanticResults.length,
       lexicalRetrieved: lexicalResults.length,
