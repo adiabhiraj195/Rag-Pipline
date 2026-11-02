@@ -24,10 +24,13 @@ export interface RetrievalPipelineOptions {
   history?: ChatMessage[];
   /** Minimum relevance score threshold for reranked chunks (default: 0.75) */
   scoreThreshold?: number;
+  /** Actual user question for reranking and final prompt display (defaults to search query) */
+  userQuery?: string;
 }
 
 export interface RetrievalPipelineResult {
   query: string;
+  userQuery?: string;
   sources: ContextChunkInfo[];
   context: string;
   systemPrompt: string;
@@ -91,7 +94,8 @@ export async function runRetrievalPipeline(
   console.log(`[Retrieval Pipeline] RRF blended into ${rrfCandidates.length} unique candidates.`);
 
   // Step 4: Cross-Encoder ReRanker with Cohere (scoring chunks against query)
-  const rerankedChunks = await rerankDocuments(rrfCandidates, trimmedQuery, {
+  const rerankQuery = options.userQuery?.trim() || trimmedQuery;
+  const rerankedChunks = await rerankDocuments(rrfCandidates, rerankQuery, {
     topN: topK,
   });
 
@@ -114,9 +118,10 @@ export async function runRetrievalPipeline(
   );
 
   // Step 5: Build grounded Context and Prompts using qualified chunks
+  const promptQuery = options.userQuery?.trim() || trimmedQuery;
   const { formattedContext, systemPrompt, userPrompt, chunksInfo } = buildContext(
     qualifiedChunks,
-    trimmedQuery
+    promptQuery
   );
 
   const durationMs = Date.now() - startTime;
@@ -124,6 +129,7 @@ export async function runRetrievalPipeline(
 
   return {
     query: trimmedQuery,
+    userQuery: promptQuery,
     sources: chunksInfo,
     context: formattedContext,
     systemPrompt,

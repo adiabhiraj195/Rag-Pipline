@@ -218,6 +218,20 @@ async function runTests() {
     throw new Error(`Expected empty query to return 'clarify', got: ${emptyQueryResult.status}`);
   }
 
+  // Test 5D: Empty query with HyDE enabled still returns clarify
+  const hydeEmptyResult = await rewriteQuery("   ", [], { HyDE: true });
+  console.log("✓ HyDE empty query result:", hydeEmptyResult);
+  if (hydeEmptyResult.status !== "clarify") {
+    throw new Error(`Expected HyDE empty query to return 'clarify', got: ${hydeEmptyResult.status}`);
+  }
+
+  // Test 5E: Normal flow when HyDE is not specified or false
+  const hydeFalseResult = await rewriteQuery("What is our refund policy?", [], { HyDE: false });
+  console.log("✓ HyDE false normal flow result:", hydeFalseResult);
+  if (hydeFalseResult.status !== "clear" || hydeFalseResult.hypotheticalDocument) {
+    throw new Error(`Expected HyDE=false to return 'clear' with null hypotheticalDocument, got: ${JSON.stringify(hydeFalseResult)}`);
+  }
+
   console.log("\n=== 6. Testing Chat Controller Input Validation & Clarification Flow ===");
   // Test 6A: Empty query validation
   {

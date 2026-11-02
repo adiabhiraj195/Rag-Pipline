@@ -191,7 +191,8 @@ export async function sendMessageToConversation(
     }
 
     const messageText = rawMessage.trim();
-    const { topK, rrfK } = req.body;
+    const { topK, rrfK, HyDE, hyde } = req.body;
+    const useHyde = Boolean(HyDE ?? hyde);
 
     // Check conversation ownership
     const conversation = await prisma.conversation.findFirst({
@@ -236,13 +237,15 @@ export async function sendMessageToConversation(
       }));
 
     console.log(
-      `[Conversation Controller] User ${userId} sent message in conversation ${conversationId}. History length: ${history.length}`
+      `[Conversation Controller] User ${userId} sent message in conversation ${conversationId}. History length: ${history.length} (HyDE=${useHyde})`
     );
 
     // 3. Pre-process query with query-rewriting service
-    const rewriteResult = await rewriteQuery(messageText, history);
+    const rewriteResult = await rewriteQuery(messageText, history, {
+      HyDE: useHyde,
+    });
     console.log(
-      `[Conversation Controller] Query rewrite status: "${rewriteResult.status}", query: "${rewriteResult.query}"`
+      `[Conversation Controller] Query rewrite status: "${rewriteResult.status}", query: "${rewriteResult.query?.slice(0, 80)}..."`
     );
 
     // If clarification is needed, save clarification assistant message and return
@@ -259,6 +262,7 @@ export async function sendMessageToConversation(
           metadata: {
             status: "clarify",
             originalQuery: messageText,
+            hydeApplied: useHyde,
           } as any,
         },
       });
@@ -283,10 +287,8 @@ export async function sendMessageToConversation(
     }
 
     // 4. Determine optimal query to execute RAG
-    const optimalQuery =
-      rewriteResult.status === "rewritten" && rewriteResult.query
-        ? rewriteResult.query
-        : (rewriteResult.query || messageText);
+    const optimalQuery = rewriteResult.query || messageText;
+    const promptUserQuery = rewriteResult.standaloneQuery || messageText;
 
     // 5. Run hybrid RAG pipeline scoped to the authenticated user
     const retrievalResult = await runRetrievalPipeline(optimalQuery, {
@@ -294,6 +296,7 @@ export async function sendMessageToConversation(
       rrfK: rrfK ? Number(rrfK) : undefined,
       userId,
       history,
+      userQuery: promptUserQuery,
     });
 
     // 6. Invoke LLM with retrieved grounded context and conversation history
@@ -330,6 +333,8 @@ export async function sendMessageToConversation(
           originalQuery: messageText,
           rewrittenQuery: optimalQuery,
           queryRewriteStatus: rewriteResult.status,
+          hydeApplied: rewriteResult.status === "hyde",
+          hypotheticalDocument: rewriteResult.hypotheticalDocument || null,
         } as any,
       },
     });
@@ -360,8 +365,11 @@ export async function sendMessageToConversation(
         answer,
         sources: retrievalResult.sources,
         pipelineStats: retrievalResult.pipelineStats,
+        originalQuery: messageText,
         rewrittenQuery: optimalQuery,
         queryRewriteStatus: rewriteResult.status,
+        hydeApplied: rewriteResult.status === "hyde",
+        hypotheticalDocument: rewriteResult.hypotheticalDocument || null,
       },
     });
   } catch (error: any) {

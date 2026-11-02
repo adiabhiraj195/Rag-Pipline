@@ -326,12 +326,14 @@ Send a new user query to the conversation. This triggers query rewriting, hybrid
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `message` | `string` | **Yes** | The user's query/prompt (aliases: `content`, `query`). |
+| `HyDE` | `boolean` | No | When `true`, enables Hypothetical Document Embeddings (HyDE) to rewrite the query into an authoritative document passage before knowledge base retrieval. Defaults to `false` (standard conversation-aware rewriting). |
 | `topK` | `number` | No | Final top chunks to feed LLM (default `5`). |
 | `rrfK` | `number` | No | Reciprocal Rank Fusion constant (default `60`). |
 
 ```json
 {
   "message": "Can you summarize the top risks mentioned in the report?",
+  "HyDE": true,
   "topK": 5
 }
 ```
@@ -375,8 +377,10 @@ Send a new user query to the conversation. This triggers query rewriting, hybrid
           "durationMs": 1820
         },
         "originalQuery": "Can you summarize the top risks mentioned in the report?",
-        "rewrittenQuery": "Summarize top operational and financial risks",
-        "queryRewriteStatus": "rewritten"
+        "rewrittenQuery": "Executive Summary: The primary operational risks highlighted in this evaluation involve ongoing supply chain disruption, lead time inflation, and volatile material pricing across vendors...",
+        "queryRewriteStatus": "hyde",
+        "hydeApplied": true,
+        "hypotheticalDocument": "Executive Summary: The primary operational risks highlighted in this evaluation involve ongoing supply chain disruption, lead time inflation, and volatile material pricing across vendors..."
       },
       "createdAt": "2026-09-17T18:25:33.000Z"
     },
@@ -399,7 +403,11 @@ Send a new user query to the conversation. This triggers query rewriting, hybrid
       "scoreThreshold": 0.6,
       "durationMs": 1820
     },
-    "rewrittenQuery": "Summarize top operational and financial risks"
+    "originalQuery": "Can you summarize the top risks mentioned in the report?",
+    "rewrittenQuery": "Executive Summary: The primary operational risks highlighted in this evaluation involve ongoing supply chain disruption, lead time inflation, and volatile material pricing across vendors...",
+    "queryRewriteStatus": "hyde",
+    "hydeApplied": true,
+    "hypotheticalDocument": "Executive Summary: The primary operational risks highlighted in this evaluation involve ongoing supply chain disruption, lead time inflation, and volatile material pricing across vendors..."
   }
 }
 ```
@@ -838,12 +846,15 @@ Perform a one-off retrieval-augmented generation query without persisting messag
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `query` | `string` | **Yes** | User's question. |
+| `HyDE` | `boolean` | No | When `true`, enables Hypothetical Document Embeddings (HyDE) to rewrite the query into an authoritative document passage before knowledge base retrieval. Defaults to `false` (standard conversation-aware rewriting). |
 | `topK` | `number` | No | Final top chunks to feed LLM (default `5`). |
+| `rrfK` | `number` | No | Reciprocal Rank Fusion constant (default `60`). |
 | `history` | `array` | No | Optional array of `{ role: "user" \| "assistant", content: string }`. |
 
 ```json
 {
   "query": "What is our company's remote work policy?",
+  "HyDE": true,
   "topK": 5
 }
 ```
@@ -876,8 +887,10 @@ Perform a one-off retrieval-augmented generation query without persisting messag
       "durationMs": 1420
     },
     "originalQuery": "What is our company's remote work policy?",
-    "rewrittenQuery": "What is our company's remote work policy?",
-    "queryRewriteStatus": "clear"
+    "rewrittenQuery": "Remote Work and Telecommuting Guidelines: Eligible full-time employees may participate in hybrid telecommuting arrangements up to two days per week subject to managerial and departmental authorization...",
+    "queryRewriteStatus": "hyde",
+    "hydeApplied": true,
+    "hypotheticalDocument": "Remote Work and Telecommuting Guidelines: Eligible full-time employees may participate in hybrid telecommuting arrangements up to two days per week subject to managerial and departmental authorization..."
   }
 }
 ```
@@ -953,7 +966,9 @@ export interface Message {
     pipelineStats?: PipelineStats;
     rewrittenQuery?: string;
     originalQuery?: string;
-    queryRewriteStatus?: string;
+    queryRewriteStatus?: "clear" | "rewritten" | "clarify" | "hyde" | string;
+    hydeApplied?: boolean;
+    hypotheticalDocument?: string | null;
     status?: string;
   } | null;
   createdAt: string;
@@ -979,6 +994,13 @@ export interface PipelineStats {
   durationMs: number;
 }
 
+export interface SendMessageRequest {
+  message: string;
+  HyDE?: boolean;
+  topK?: number;
+  rrfK?: number;
+}
+
 export interface SendMessageResponse {
   conversationId: string;
   userMessage: Message;
@@ -986,8 +1008,33 @@ export interface SendMessageResponse {
   answer: string;
   sources?: CitationSource[];
   pipelineStats?: PipelineStats;
+  originalQuery?: string;
   rewrittenQuery?: string;
+  queryRewriteStatus?: string;
+  hydeApplied?: boolean;
+  hypotheticalDocument?: string | null;
   status?: string;
+}
+
+export interface ChatQueryRequest {
+  query: string;
+  HyDE?: boolean;
+  topK?: number;
+  rrfK?: number;
+  tenantId?: string;
+  history?: Array<{ role: "user" | "assistant"; content: string }>;
+}
+
+export interface ChatQueryResponse {
+  query: string;
+  answer: string;
+  sources: CitationSource[];
+  pipelineStats: PipelineStats;
+  originalQuery: string;
+  rewrittenQuery: string;
+  queryRewriteStatus: string;
+  hydeApplied?: boolean;
+  hypotheticalDocument?: string | null;
 }
 
 export interface DocumentItem {

@@ -140,7 +140,13 @@ export async function lexicalSearch(
     }
 
     // Build query with prefix matching on terms for better recall: (term1* | term2*)
-    const termQuery = escapedTerms.map((t) => `${t}*`).join(" | ");
+    // Deduplicate and filter short noise words to handle long HyDE passages smoothly
+    const uniqueTerms = Array.from(
+      new Set(escapedTerms.filter((t) => t.length >= 3))
+    );
+    const selectedTerms =
+      uniqueTerms.length > 0 ? uniqueTerms.slice(0, 30) : escapedTerms.slice(0, 15);
+    const termQuery = selectedTerms.map((t) => `${t}*`).join(" | ");
     const ftQuery = `@content:(${termQuery})`;
 
     const searchResults = await client.ft.search(indexName, ftQuery, {
