@@ -12,7 +12,7 @@
     "test:retrieval": "tsx src/test-retrieval.ts",
     "dev": "tsx watch src/server.ts",
     "build": "prisma generate && tsc",
-    "start": "tsx src/server.ts"
+    "start": "npx prisma db push && tsx src/server.ts"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
