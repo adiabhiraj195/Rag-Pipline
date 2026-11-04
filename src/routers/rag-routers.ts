@@ -3,6 +3,7 @@ import {
   createPresignedUrl,
   injestFileToStore,
   getJobStatus,
+  getChunkingStrategies,
 } from "../controller/injestion-controller";
 import { handleChatQuery } from "../controller/chat-controller";
 
@@ -14,8 +15,15 @@ const ragRouters = Router();
 ragRouters.post("/upload-url", createPresignedUrl);
 ragRouters.post("/presigned-url", createPresignedUrl);
 
-// Route to queue a document ingestion job
+// Route to inspect available chunking strategies (e.g. recursive, structure_aware)
+ragRouters.get("/chunking-strategies", getChunkingStrategies);
+ragRouters.get("/chunking-methods", getChunkingStrategies);
+
+// Route to queue a document ingestion job (supports both text and PDF with user-selected chunkingStrategy)
 ragRouters.post("/injestTXT", injestFileToStore);
+ragRouters.post("/injest", injestFileToStore);
+ragRouters.post("/ingest", injestFileToStore);
+ragRouters.post("/ingest-document", injestFileToStore);
 
 // Route to check status and progress of an ingestion job
 ragRouters.get("/job-status/:jobId", getJobStatus);

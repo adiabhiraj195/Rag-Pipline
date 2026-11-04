@@ -53,8 +53,9 @@ Authorization: Bearer <your_jwt_token>
 4. [Document Ingestion Pipeline](#4-document-ingestion-pipeline)
    - [4.1 Generate Presigned Upload URL](#41-generate-presigned-upload-url) (`POST /rag/upload-url`)
    - [4.2 Direct S3 File Upload](#42-direct-s3-file-upload) (`PUT <presignedUrl>`)
-   - [4.3 Queue Ingestion Job](#43-queue-ingestion-job) (`POST /rag/injestTXT`)
-   - [4.4 Check Ingestion Job Status](#44-check-ingestion-job-status) (`GET /rag/job-status/:jobId`)
+   - [4.3 Get Available Chunking Strategies](#43-get-available-chunking-strategies) (`GET /rag/chunking-strategies`)
+   - [4.4 Queue Ingestion Job (Text & PDF)](#44-queue-ingestion-job-text--pdf) (`POST /rag/injestTXT`, `/rag/injest`, `/rag/ingest`)
+   - [4.5 Check Ingestion Job Status](#45-check-ingestion-job-status) (`GET /rag/job-status/:jobId`)
 5. [Stateless Chat & Retrieval Endpoint](#5-stateless-chat--retrieval-endpoint)
    - [5.1 Stateless Hybrid RAG Query](#51-stateless-hybrid-rag-query) (`POST /rag/chat`)
 6. [System Health](#6-system-health)
@@ -325,12 +326,14 @@ Send a new user query to the conversation. This triggers query rewriting, hybrid
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `message` | `string` | **Yes** | The user's query/prompt (aliases: `content`, `query`). |
+| `HyDE` | `boolean` | No | When `true`, enables Hypothetical Document Embeddings (HyDE) to rewrite the query into an authoritative document passage before knowledge base retrieval. Defaults to `false` (standard conversation-aware rewriting). |
 | `topK` | `number` | No | Final top chunks to feed LLM (default `5`). |
 | `rrfK` | `number` | No | Reciprocal Rank Fusion constant (default `60`). |
 
 ```json
 {
   "message": "Can you summarize the top risks mentioned in the report?",
+  "HyDE": true,
   "topK": 5
 }
 ```
@@ -374,8 +377,10 @@ Send a new user query to the conversation. This triggers query rewriting, hybrid
           "durationMs": 1820
         },
         "originalQuery": "Can you summarize the top risks mentioned in the report?",
-        "rewrittenQuery": "Summarize top operational and financial risks",
-        "queryRewriteStatus": "rewritten"
+        "rewrittenQuery": "Executive Summary: The primary operational risks highlighted in this evaluation involve ongoing supply chain disruption, lead time inflation, and volatile material pricing across vendors...",
+        "queryRewriteStatus": "hyde",
+        "hydeApplied": true,
+        "hypotheticalDocument": "Executive Summary: The primary operational risks highlighted in this evaluation involve ongoing supply chain disruption, lead time inflation, and volatile material pricing across vendors..."
       },
       "createdAt": "2026-09-17T18:25:33.000Z"
     },
@@ -398,7 +403,11 @@ Send a new user query to the conversation. This triggers query rewriting, hybrid
       "scoreThreshold": 0.6,
       "durationMs": 1820
     },
-    "rewrittenQuery": "Summarize top operational and financial risks"
+    "originalQuery": "Can you summarize the top risks mentioned in the report?",
+    "rewrittenQuery": "Executive Summary: The primary operational risks highlighted in this evaluation involve ongoing supply chain disruption, lead time inflation, and volatile material pricing across vendors...",
+    "queryRewriteStatus": "hyde",
+    "hydeApplied": true,
+    "hypotheticalDocument": "Executive Summary: The primary operational risks highlighted in this evaluation involve ongoing supply chain disruption, lead time inflation, and volatile material pricing across vendors..."
   }
 }
 ```
@@ -700,28 +709,62 @@ await fetch(presignedUrl, {
 
 ---
 
-### 4.3 Queue Ingestion Job
-Notify the backend that the file is in S3 and queue the background parsing, chunking, enrichment, vector embedding, and Redis indexing job.
+### 4.3 Get Available Chunking Strategies
+Inspect the chunking methods registered in the ingestion pipeline.
+
+- **Method**: `GET`
+- **Path**: `/rag/chunking-strategies` (alias: `/chunking-strategies`, `/rag/chunking-methods`)
+- **Access**: 🌐 Public
+
+#### Responses
+- **`200 OK`**:
+```json
+{
+  "success": true,
+  "data": {
+    "strategies": [
+      {
+        "name": "recursive",
+        "displayName": "Recursive Character Splitter",
+        "description": "Splits text recursively by paragraphs (\\n\\n), lines (\\n), sentences, and words based on character count."
+      },
+      {
+        "name": "structure_aware",
+        "displayName": "Structure-Aware Chunker",
+        "description": "Understands document hierarchy (headings, sections, lists, tables, and PDF pages) and preserves structural context for each chunk."
+      }
+    ],
+    "default": "recursive"
+  }
+}
+```
+
+---
+
+### 4.4 Queue Ingestion Job (Text & PDF)
+Notify the backend that the file is in S3 and queue background document parsing (supports both plain text and PDF formats), user-selected chunking strategy (`recursive` or `structure_aware`), chunk enrichment, vector embedding, and Redis indexing.
 
 - **Method**: `POST`
-- **Path**: `/rag/injestTXT` (alias: `/injestTXT`)
+- **Path**: `/rag/injestTXT` (aliases: `/injest`, `/ingest`, `/injestTXT`)
 - **Access**: 🌐 Public / Optional Auth
 
 #### Request Body
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `s3Key` | `string` | **Yes** | The `s3Key` returned in step 4.1. |
-| `filename` | `string` | **Yes** | File display name. |
-| `mimeType` | `string` | No | File MIME type (default: `"text/plain"`). |
-| `chunkSize` | `number` | No | Chunk size in characters (default `800`). |
-| `chunkOverlap` | `number` | No | Overlap in characters (default `100`). |
+| `filename` | `string` | **Yes** | File display name (e.g. `"annual-report.pdf"` or `"manual.txt"`). |
+| `mimeType` | `string` | No | File MIME type (default: `"application/pdf"` if `.pdf`, else `"text/plain"`). |
+| `chunkingStrategy` | `string` | No | Chunking method: `"recursive"` or `"structure_aware"` (alias: `chunkingType`, default: `"recursive"`). |
+| `chunkSize` | `number` | No | Target chunk size in characters (default: `800`). |
+| `chunkOverlap` | `number` | No | Overlap in characters between chunks (default: `100`). |
 | `metadata` | `object` | No | Custom JSON key-values attached to all chunks. |
 
 ```json
 {
-  "s3Key": "uploads/general/uuid-handbook.txt",
-  "filename": "employee-handbook-2026.txt",
-  "mimeType": "text/plain",
+  "s3Key": "uploads/general/uuid-annual-report.pdf",
+  "filename": "annual-report-2025.pdf",
+  "mimeType": "application/pdf",
+  "chunkingStrategy": "structure_aware",
   "chunkSize": 800,
   "chunkOverlap": 100
 }
@@ -735,21 +778,23 @@ Notify the backend that the file is in S3 and queue the background parsing, chun
   "message": "Document ingestion job queued successfully.",
   "data": {
     "jobId": "14",
-    "queueName": "document-ingestion",
+    "queueName": "txt-ingestion-queue",
     "documentId": "48805a5b-93ff-4076-a077-40ff1100f913",
-    "filename": "employee-handbook-2026.txt",
-    "mimeType": "text/plain",
-    "s3Key": "uploads/general/uuid-handbook.txt",
+    "filename": "annual-report-2025.pdf",
+    "mimeType": "application/pdf",
+    "s3Key": "uploads/general/uuid-annual-report.pdf",
     "status": "PENDING",
     "chunkSize": 800,
-    "chunkOverlap": 100
+    "chunkOverlap": 100,
+    "chunkingStrategy": "structure_aware"
   }
 }
 ```
+- **`400 Bad Request`**: If an invalid `chunkingStrategy` is passed (e.g. `"unsupported"`), returns list of supported strategies.
 
 ---
 
-### 4.4 Check Ingestion Job Status
+### 4.5 Check Ingestion Job Status
 Check the progress and status of a running background ingestion job.
 
 - **Method**: `GET`
@@ -801,12 +846,15 @@ Perform a one-off retrieval-augmented generation query without persisting messag
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `query` | `string` | **Yes** | User's question. |
+| `HyDE` | `boolean` | No | When `true`, enables Hypothetical Document Embeddings (HyDE) to rewrite the query into an authoritative document passage before knowledge base retrieval. Defaults to `false` (standard conversation-aware rewriting). |
 | `topK` | `number` | No | Final top chunks to feed LLM (default `5`). |
+| `rrfK` | `number` | No | Reciprocal Rank Fusion constant (default `60`). |
 | `history` | `array` | No | Optional array of `{ role: "user" \| "assistant", content: string }`. |
 
 ```json
 {
   "query": "What is our company's remote work policy?",
+  "HyDE": true,
   "topK": 5
 }
 ```
@@ -839,8 +887,10 @@ Perform a one-off retrieval-augmented generation query without persisting messag
       "durationMs": 1420
     },
     "originalQuery": "What is our company's remote work policy?",
-    "rewrittenQuery": "What is our company's remote work policy?",
-    "queryRewriteStatus": "clear"
+    "rewrittenQuery": "Remote Work and Telecommuting Guidelines: Eligible full-time employees may participate in hybrid telecommuting arrangements up to two days per week subject to managerial and departmental authorization...",
+    "queryRewriteStatus": "hyde",
+    "hydeApplied": true,
+    "hypotheticalDocument": "Remote Work and Telecommuting Guidelines: Eligible full-time employees may participate in hybrid telecommuting arrangements up to two days per week subject to managerial and departmental authorization..."
   }
 }
 ```
@@ -916,7 +966,9 @@ export interface Message {
     pipelineStats?: PipelineStats;
     rewrittenQuery?: string;
     originalQuery?: string;
-    queryRewriteStatus?: string;
+    queryRewriteStatus?: "clear" | "rewritten" | "clarify" | "hyde" | string;
+    hydeApplied?: boolean;
+    hypotheticalDocument?: string | null;
     status?: string;
   } | null;
   createdAt: string;
@@ -942,6 +994,13 @@ export interface PipelineStats {
   durationMs: number;
 }
 
+export interface SendMessageRequest {
+  message: string;
+  HyDE?: boolean;
+  topK?: number;
+  rrfK?: number;
+}
+
 export interface SendMessageResponse {
   conversationId: string;
   userMessage: Message;
@@ -949,8 +1008,33 @@ export interface SendMessageResponse {
   answer: string;
   sources?: CitationSource[];
   pipelineStats?: PipelineStats;
+  originalQuery?: string;
   rewrittenQuery?: string;
+  queryRewriteStatus?: string;
+  hydeApplied?: boolean;
+  hypotheticalDocument?: string | null;
   status?: string;
+}
+
+export interface ChatQueryRequest {
+  query: string;
+  HyDE?: boolean;
+  topK?: number;
+  rrfK?: number;
+  tenantId?: string;
+  history?: Array<{ role: "user" | "assistant"; content: string }>;
+}
+
+export interface ChatQueryResponse {
+  query: string;
+  answer: string;
+  sources: CitationSource[];
+  pipelineStats: PipelineStats;
+  originalQuery: string;
+  rewrittenQuery: string;
+  queryRewriteStatus: string;
+  hydeApplied?: boolean;
+  hypotheticalDocument?: string | null;
 }
 
 export interface DocumentItem {

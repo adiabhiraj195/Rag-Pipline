@@ -10,7 +10,7 @@ import { queryRewriterModel } from "../llm/model";
 // Output schema
 // ---------------------------------------------
 
-export const QueryRewriteSchema = z.object({
+export const ConversationRewriteSchema = z.object({
   status: z
     .enum(["rewritten", "clear", "clarify"])
     .describe(
@@ -30,6 +30,40 @@ export const QueryRewriteSchema = z.object({
     ),
 });
 
+export const QueryRewriteSchema = z.object({
+  status: z
+    .enum(["rewritten", "clear", "clarify", "hyde"])
+    .describe(
+      "Status of the query rewrite: 'clear' if already standalone and complete; 'rewritten' if contextual references/pronouns were resolved; 'clarify' if ambiguous, vague, or lacking sufficient information; 'hyde' if expanded via Hypothetical Document Embeddings"
+    ),
+  query: z
+    .string()
+    .nullable()
+    .describe(
+      "The standalone search query or hypothetical document for vector/lexical retrieval. Null if status is clarify"
+    ),
+  response: z
+    .string()
+    .nullable()
+    .describe(
+      "Helpful clarification question for the user if status is clarify. Null otherwise"
+    ),
+  hypotheticalDocument: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "The generated hypothetical passage when HyDE is enabled. Null or undefined otherwise"
+    ),
+  standaloneQuery: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "The underlying standalone query before HyDE expansion"
+    ),
+});
+
 export type QueryRewriteResult = z.infer<typeof QueryRewriteSchema>;
 
 export interface ChatHistoryMessage {
@@ -37,11 +71,22 @@ export interface ChatHistoryMessage {
   content: string;
 }
 
+export interface RewriteQueryOptions {
+  /**
+   * If true, enables Hypothetical Document Embeddings (HyDE) rewriting
+   * before searching in the knowledge base.
+   */
+  hyde?: boolean;
+  HyDE?: boolean;
+}
+
 // ---------------------------------------------
 // LLM with Structured Output
 // ---------------------------------------------
 
-const structuredLLM = queryRewriterModel.withStructuredOutput(QueryRewriteSchema);
+const structuredLLM = queryRewriterModel.withStructuredOutput(
+  ConversationRewriteSchema
+);
 
 // ---------------------------------------------
 // Prompt Definition
@@ -112,6 +157,47 @@ const prompt = ChatPromptTemplate.fromMessages([
 const rewriteChain = prompt.pipe(structuredLLM);
 
 // ---------------------------------------------
+// HyDE (Hypothetical Document Embeddings) Setup
+// ---------------------------------------------
+
+const HYDE_SYSTEM_PROMPT = `You are an expert technical writer and knowledge retrieval assistant.
+Your task is to generate a hypothetical document passage (Hypothetical Document Embeddings - HyDE) that directly answers the given user question.
+
+Instructions:
+1. Write an authoritative, detailed, and factual passage as if it were an excerpt from an official knowledge base, documentation, guide, or policy manual.
+2. Incorporate relevant domain terminology, key concepts, facts, and vocabulary that would naturally appear in a document answering this query.
+3. Do NOT include greetings, conversational filler, markdown code fence blocks, introductory phrases (e.g. "Here is a hypothetical document:", "Title:", "Passage:"), or commentary. Output ONLY the raw passage text.
+4. Keep the passage focused and comprehensive (around 80 to 200 words).`;
+
+const hydePrompt = ChatPromptTemplate.fromMessages([
+  ["system", HYDE_SYSTEM_PROMPT],
+  ["human", "{query}"],
+]);
+
+const hydeChain = hydePrompt.pipe(queryRewriterModel);
+
+/**
+ * Generates a hypothetical document passage for a query using HyDE.
+ *
+ * @param query - The standalone user question.
+ * @returns The hypothetical document passage string.
+ */
+export async function generateHypotheticalDocument(
+  query: string
+): Promise<string> {
+  const cleaned = (query || "").trim();
+  if (!cleaned) return "";
+
+  const response = await hydeChain.invoke({ query: cleaned });
+  const passage =
+    typeof response.content === "string"
+      ? response.content.trim()
+      : JSON.stringify(response.content).trim();
+
+  return passage;
+}
+
+// ---------------------------------------------
 // Helper: Map History to LangChain BaseMessage instances
 // ---------------------------------------------
 
@@ -142,15 +228,24 @@ function formatHistoryMessages(
 
 /**
  * Rewrites or clarifies a user query based on recent conversation history.
+ * When HyDE is enabled, rewrites the query into an authoritative hypothetical document
+ * passage for semantic vector and lexical retrieval.
  *
  * @param query - The latest query from the user.
  * @param history - Array of previous chat messages.
- * @returns QueryRewriteResult with status ('clear' | 'rewritten' | 'clarify'), query, and optional response.
+ * @param options - Options object (or boolean) indicating whether HyDE rewriting is enabled.
+ * @returns QueryRewriteResult with status ('clear' | 'rewritten' | 'clarify' | 'hyde'), query, and optional response.
  */
 export async function rewriteQuery(
   query: string,
-  history: ChatHistoryMessage[] = []
+  history: ChatHistoryMessage[] = [],
+  options: RewriteQueryOptions | boolean = false
 ): Promise<QueryRewriteResult> {
+  const useHyde =
+    typeof options === "boolean"
+      ? options
+      : Boolean(options?.HyDE ?? options?.hyde);
+
   const cleanedQuery = (query || "").trim();
 
   // Fast-path for empty or whitespace-only queries
@@ -159,6 +254,7 @@ export async function rewriteQuery(
       status: "clarify",
       query: null,
       response: "Please provide a question or message so I can assist you.",
+      hypotheticalDocument: null,
     };
   }
 
@@ -167,13 +263,70 @@ export async function rewriteQuery(
   const recentHistory = safeHistory.slice(-10);
   const formattedHistory = formatHistoryMessages(recentHistory);
 
+  // -------------------------------------------------------------
+  // Flow A: Normal flow with just conversation-aware rewriting
+  // -------------------------------------------------------------
+  if (!useHyde) {
+    try {
+      const result = await rewriteChain.invoke({
+        history: formattedHistory,
+        query: cleanedQuery,
+      });
+
+      // Enforce consistent schema guarantees
+      if (result.status === "clarify") {
+        return {
+          status: "clarify",
+          query: null,
+          response:
+            result.response ||
+            "Your query is not clear enough. Could you please clarify what you mean?",
+          hypotheticalDocument: null,
+        };
+      }
+
+      if (result.status === "rewritten") {
+        return {
+          status: "rewritten",
+          query: result.query?.trim() || cleanedQuery,
+          response: null,
+          hypotheticalDocument: null,
+        };
+      }
+
+      return {
+        status: "clear",
+        query: result.query?.trim() || cleanedQuery,
+        response: null,
+        hypotheticalDocument: null,
+      };
+    } catch (error: any) {
+      console.error(
+        `[Query Rewriter Error] Failed to process query "${cleanedQuery}":`,
+        error?.message || error
+      );
+
+      // Fallback gracefully so chat pipeline is not blocked
+      return {
+        status: "clear",
+        query: cleanedQuery,
+        response: null,
+        hypotheticalDocument: null,
+      };
+    }
+  }
+
+  // -------------------------------------------------------------
+  // Flow B: HyDE flow (Hypothetical Document Embeddings)
+  // -------------------------------------------------------------
   try {
+    // Step 1: Pre-process with conversation awareness to resolve pronouns/context
+    // and verify if the query needs clarification before generating HyDE.
     const result = await rewriteChain.invoke({
       history: formattedHistory,
       query: cleanedQuery,
     });
 
-    // Enforce consistent schema guarantees
     if (result.status === "clarify") {
       return {
         status: "clarify",
@@ -181,33 +334,55 @@ export async function rewriteQuery(
         response:
           result.response ||
           "Your query is not clear enough. Could you please clarify what you mean?",
+        hypotheticalDocument: null,
       };
     }
 
-    if (result.status === "rewritten") {
+    const standaloneQuery = result.query?.trim() || cleanedQuery;
+
+    // Step 2: Generate hypothetical document answering the standalone query
+    console.log(
+      `[HyDE] Generating hypothetical document for standalone query: "${standaloneQuery}"`
+    );
+    const hypotheticalDoc = await generateHypotheticalDocument(standaloneQuery);
+
+    if (!hypotheticalDoc) {
+      console.warn(
+        `[HyDE] Generated document was empty. Falling back to standalone query.`
+      );
       return {
-        status: "rewritten",
-        query: result.query?.trim() || cleanedQuery,
+        status: result.status === "rewritten" ? "rewritten" : "clear",
+        query: standaloneQuery,
         response: null,
+        hypotheticalDocument: null,
+        standaloneQuery,
       };
     }
+
+    console.log(
+      `[HyDE] Successfully generated hypothetical document (${hypotheticalDoc.length} chars).`
+    );
 
     return {
-      status: "clear",
-      query: result.query?.trim() || cleanedQuery,
+      status: "hyde",
+      query: hypotheticalDoc,
       response: null,
+      hypotheticalDocument: hypotheticalDoc,
+      standaloneQuery,
     };
   } catch (error: any) {
     console.error(
-      `[Query Rewriter Error] Failed to process query "${cleanedQuery}":`,
+      `[HyDE Error] Failed to generate HyDE rewrite for "${cleanedQuery}":`,
       error?.message || error
     );
 
-    // Fallback gracefully so chat pipeline is not blocked
+    // Fallback gracefully to raw query so chat pipeline remains functional
     return {
       status: "clear",
       query: cleanedQuery,
       response: null,
+      hypotheticalDocument: null,
+      standaloneQuery: cleanedQuery,
     };
   }
 }

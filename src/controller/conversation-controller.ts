@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { prisma } from "../config/prisma";
 import { runRetrievalPipeline, ChatMessage } from "../rag/retrive/retrieval-pipeline";
 import { rewriteQuery } from "../services/query-rewriting";
+import { groqModel } from "../llm/model";
 
 function isValidUuid(str: any): boolean {
   if (typeof str !== "string") return false;
@@ -190,7 +191,8 @@ export async function sendMessageToConversation(
     }
 
     const messageText = rawMessage.trim();
-    const { topK, rrfK } = req.body;
+    const { topK, rrfK, HyDE, hyde } = req.body;
+    const useHyde = Boolean(HyDE ?? hyde);
 
     // Check conversation ownership
     const conversation = await prisma.conversation.findFirst({
@@ -235,13 +237,15 @@ export async function sendMessageToConversation(
       }));
 
     console.log(
-      `[Conversation Controller] User ${userId} sent message in conversation ${conversationId}. History length: ${history.length}`
+      `[Conversation Controller] User ${userId} sent message in conversation ${conversationId}. History length: ${history.length} (HyDE=${useHyde})`
     );
 
     // 3. Pre-process query with query-rewriting service
-    const rewriteResult = await rewriteQuery(messageText, history);
+    const rewriteResult = await rewriteQuery(messageText, history, {
+      HyDE: useHyde,
+    });
     console.log(
-      `[Conversation Controller] Query rewrite status: "${rewriteResult.status}", query: "${rewriteResult.query}"`
+      `[Conversation Controller] Query rewrite status: "${rewriteResult.status}", query: "${rewriteResult.query?.slice(0, 80)}..."`
     );
 
     // If clarification is needed, save clarification assistant message and return
@@ -258,6 +262,7 @@ export async function sendMessageToConversation(
           metadata: {
             status: "clarify",
             originalQuery: messageText,
+            hydeApplied: useHyde,
           } as any,
         },
       });
@@ -282,36 +287,59 @@ export async function sendMessageToConversation(
     }
 
     // 4. Determine optimal query to execute RAG
-    const optimalQuery =
-      rewriteResult.status === "rewritten" && rewriteResult.query
-        ? rewriteResult.query
-        : (rewriteResult.query || messageText);
+    const optimalQuery = rewriteResult.query || messageText;
+    const promptUserQuery = rewriteResult.standaloneQuery || messageText;
 
     // 5. Run hybrid RAG pipeline scoped to the authenticated user
-    const pipelineResult = await runRetrievalPipeline(optimalQuery, {
+    const retrievalResult = await runRetrievalPipeline(optimalQuery, {
       topK: topK ? Number(topK) : undefined,
       rrfK: rrfK ? Number(rrfK) : undefined,
       userId,
       history,
+      userQuery: promptUserQuery,
     });
 
-    // 6. Persist assistant message with citations and retrieval metadata
+    // 6. Invoke LLM with retrieved grounded context and conversation history
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: retrievalResult.systemPrompt },
+    ];
+
+    for (const msg of history) {
+      if (msg.role === "user" || msg.role === "assistant") {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    messages.push({ role: "user", content: retrievalResult.userPrompt });
+
+    console.log(
+      `[Conversation Controller] Invoking LLM for conversation ${conversationId}...`
+    );
+    const llmResponse = await groqModel.invoke(messages);
+    const answer =
+      typeof llmResponse.content === "string"
+        ? llmResponse.content
+        : JSON.stringify(llmResponse.content);
+
+    // 7. Persist assistant message with citations and retrieval metadata
     const assistantMessage = await prisma.message.create({
       data: {
         conversationId,
         role: "assistant",
-        content: pipelineResult.answer,
+        content: answer,
         metadata: {
-          sources: pipelineResult.sources,
-          pipelineStats: pipelineResult.pipelineStats,
+          sources: retrievalResult.sources,
+          pipelineStats: retrievalResult.pipelineStats,
           originalQuery: messageText,
           rewrittenQuery: optimalQuery,
           queryRewriteStatus: rewriteResult.status,
+          hydeApplied: rewriteResult.status === "hyde",
+          hypotheticalDocument: rewriteResult.hypotheticalDocument || null,
         } as any,
       },
     });
 
-    // 7. Auto-update conversation title if it is still "New Conversation"
+    // 8. Auto-update conversation title if it is still "New Conversation"
     const updateData: { updatedAt: Date; title?: string } = {
       updatedAt: new Date(),
     };
@@ -334,10 +362,14 @@ export async function sendMessageToConversation(
         conversationId,
         userMessage,
         assistantMessage,
-        answer: pipelineResult.answer,
-        sources: pipelineResult.sources,
-        pipelineStats: pipelineResult.pipelineStats,
+        answer,
+        sources: retrievalResult.sources,
+        pipelineStats: retrievalResult.pipelineStats,
+        originalQuery: messageText,
         rewrittenQuery: optimalQuery,
+        queryRewriteStatus: rewriteResult.status,
+        hydeApplied: rewriteResult.status === "hyde",
+        hypotheticalDocument: rewriteResult.hypotheticalDocument || null,
       },
     });
   } catch (error: any) {

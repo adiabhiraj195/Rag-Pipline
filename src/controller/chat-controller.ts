@@ -1,12 +1,14 @@
 import type { Request, Response } from "express";
 import { runRetrievalPipeline } from "../rag/retrive/retrieval-pipeline";
 import { rewriteQuery } from "../services/query-rewriting";
+import { groqModel } from "../llm/model";
 
 /**
  * Controller to handle chat queries using hybrid retrieval (Dense Semantic + Lexical + RRF + ReRanker + LLM).
  * POST /rag/chat or POST /chat
  * Body: {
  *   query: string,
+ *   HyDE?: boolean,
  *   topK?: number,
  *   rrfK?: number,
  *   tenantId?: string,
@@ -18,7 +20,8 @@ export async function handleChatQuery(
   res: Response
 ): Promise<void> {
   try {
-    const { query, topK, rrfK, tenantId, history } = req.body;
+    const { query, topK, rrfK, tenantId, history, HyDE, hyde } = req.body;
+    const useHyde = Boolean(HyDE ?? hyde);
 
     if (!query || typeof query !== "string" || query.trim() === "") {
       res.status(400).json({
@@ -54,11 +57,13 @@ export async function handleChatQuery(
 
     // Step 1: Pre-process query through rewriteQuery to get optimal query or clarification
     console.log(
-      `[Chat Controller] Evaluating query: "${query}" with ${normalizedHistory.length} history items.`
+      `[Chat Controller] Evaluating query: "${query}" with ${normalizedHistory.length} history items (HyDE=${useHyde}).`
     );
-    const rewriteResult = await rewriteQuery(query, normalizedHistory);
+    const rewriteResult = await rewriteQuery(query, normalizedHistory, {
+      HyDE: useHyde,
+    });
     console.log(
-      `[Chat Controller] Query rewrite status: "${rewriteResult.status}", query: "${rewriteResult.query}"`
+      `[Chat Controller] Query rewrite status: "${rewriteResult.status}", query: "${rewriteResult.query?.slice(0, 80)}..."`
     );
 
     // If clarification is requested, immediately return response without RAG lookup
@@ -80,31 +85,53 @@ export async function handleChatQuery(
       return;
     }
 
-    // Step 2: Use optimal rewritten or clear query for retrieval
-    const optimalQuery =
-      rewriteResult.status === "rewritten" && rewriteResult.query
-        ? rewriteResult.query
-        : (rewriteResult.query || query);
+    // Step 2: Use optimal rewritten or HyDE-expanded query for retrieval
+    const optimalQuery = rewriteResult.query || query;
+    const promptUserQuery = rewriteResult.standaloneQuery || query;
 
     console.log(
-      `[Chat Controller] Passing optimal query to retrieval pipeline: "${optimalQuery}"`
+      `[Chat Controller] Passing optimal query to retrieval pipeline: "${optimalQuery.slice(0, 80)}..."`
     );
 
-    const result = await runRetrievalPipeline(optimalQuery, {
+    const retrievalResult = await runRetrievalPipeline(optimalQuery, {
       topK: topK ? Number(topK) : undefined,
       rrfK: rrfK ? Number(rrfK) : undefined,
       tenantId: tenantId ? String(tenantId) : undefined,
       history: normalizedHistory,
+      userQuery: promptUserQuery,
     });
+
+    // Step 3: Invoke LLM with retrieved grounded context and conversation history
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: retrievalResult.systemPrompt },
+    ];
+
+    for (const msg of normalizedHistory) {
+      if (msg.role === "user" || msg.role === "assistant") {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    messages.push({ role: "user", content: retrievalResult.userPrompt });
+
+    console.log(`[Chat Controller] Invoking LLM for final generation...`);
+    const llmResponse = await groqModel.invoke(messages);
+    const answer =
+      typeof llmResponse.content === "string"
+        ? llmResponse.content
+        : JSON.stringify(llmResponse.content);
 
     res.status(200).json({
       success: true,
       message: "Chat query processed successfully.",
       data: {
-        ...result,
+        ...retrievalResult,
+        answer,
         originalQuery: query,
         rewrittenQuery: optimalQuery,
         queryRewriteStatus: rewriteResult.status,
+        hydeApplied: rewriteResult.status === "hyde",
+        hypotheticalDocument: rewriteResult.hypotheticalDocument || null,
       },
     });
   } catch (error: any) {

@@ -10,12 +10,15 @@ import {
 import {
   loadTextDocument,
   loadTextContent,
+  loadPdfFromBuffer,
+  isPdfDocument,
   splitLoadedTextDocument,
 } from "../rag/injestion/load-document";
+import { runChunkingMethod } from "../rag/chunking";
 import { enrichChunks } from "../rag/injestion/enrich-chunks";
 import { getVectorStore } from "../vector/vector-store";
 import { embeddingModel } from "../llm/model";
-import { downloadFileContentFromS3 } from "../config/s3";
+import { downloadFileContentFromS3, downloadFileBufferFromS3 } from "../config/s3";
 import { prisma } from "../config/prisma";
 import type { Document } from "@langchain/classic/document";
 
@@ -28,6 +31,8 @@ export interface IngestionJobResult {
   totalChunks: number;
   processedAt: string;
   source: string;
+  chunkingStrategy?: string;
+  pageCount?: number;
 }
 
 export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
@@ -48,6 +53,8 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
       metadata = {},
       chunkSize,
       chunkOverlap,
+      chunkingStrategy,
+      chunkingType,
     } = job.data;
 
     if (!documentId) {
@@ -66,36 +73,56 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
     }
 
     try {
-      // Step 1: Download / Load file content
+      // Step 1: Download / Load file content (Text or PDF)
       await job.updateProgress(15);
       let loadedDocs: Document[];
       let textContent = "";
+      let pageCount = 1;
 
       if (s3Key) {
-        console.log(`[Worker] [Job #${job.id}] Downloading file content from S3 (Key: ${s3Key})...`);
-        textContent = await downloadFileContentFromS3(s3Key);
-        // console.log(`[Worker] [Job #${job.id}] Downloaded Content : ${textContent}`)
-        console.log(`[Worker] [Job #${job.id}] Successfully downloaded ${textContent.length} characters from S3.`);
+        console.log(`[Worker] [Job #${job.id}] Fetching file from S3 (Key: ${s3Key})...`);
+        const isPdf = isPdfDocument(filename, mimeType) || isPdfDocument(s3Key);
 
-        loadedDocs = loadTextContent(textContent, {
-          source: filename,
-          s3Key,
-          mimeType,
-        });
+        if (isPdf) {
+          console.log(`[Worker] [Job #${job.id}] Detected PDF document. Downloading binary buffer...`);
+          const buffer = await downloadFileBufferFromS3(s3Key);
+          console.log(`[Worker] [Job #${job.id}] Downloaded ${buffer.length} bytes. Parsing PDF content...`);
+          const pdfResult = await loadPdfFromBuffer(buffer, {
+            filename,
+            s3Key,
+            mimeType: "application/pdf",
+          });
+          loadedDocs = pdfResult.documents;
+          textContent = pdfResult.fullText;
+          pageCount = pdfResult.pageCount;
+          console.log(
+            `[Worker] [Job #${job.id}] Successfully parsed PDF into ${loadedDocs.length} page document(s), ${textContent.length} total chars.`
+          );
+        } else {
+          textContent = await downloadFileContentFromS3(s3Key);
+          console.log(`[Worker] [Job #${job.id}] Successfully downloaded ${textContent.length} characters from S3.`);
+          loadedDocs = loadTextContent(textContent, {
+            source: filename,
+            s3Key,
+            mimeType,
+          });
+        }
       } else {
         throw new Error("Neither 's3Key' was provided in the job data.");
       }
 
-      // Step 2: Split into chunks
+      // Step 2: Split into chunks using selected chunking strategy
       await job.updateProgress(35);
+      const chosenStrategy = chunkingStrategy || chunkingType || "recursive";
       console.log(
-        `[Worker] [Job #${job.id}] Splitting loaded document into chunks (chunkSize=${chunkSize ?? 800}, chunkOverlap=${chunkOverlap ?? 100})...`
+        `[Worker] [Job #${job.id}] Splitting loaded document into chunks using strategy='${chosenStrategy}' (chunkSize=${chunkSize ?? 800}, chunkOverlap=${chunkOverlap ?? 100})...`
       );
-      const chunks = await splitLoadedTextDocument(loadedDocs, {
+      const chunks = await runChunkingMethod(loadedDocs, {
+        strategy: chosenStrategy,
         chunkSize,
         chunkOverlap,
       });
-      console.log(`[Worker] [Job #${job.id}] Split into ${chunks.length} chunks`);
+      console.log(`[Worker] [Job #${job.id}] Split into ${chunks.length} chunks via '${chosenStrategy}'`);
 
       if (chunks.length === 0) {
         throw new Error(`Document splitting produced 0 chunks for source: ${fileSource}`);
@@ -115,7 +142,8 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
           ...metadata,
           filename,
           s3Key: s3Key || undefined,
-          mimeType,
+          mimeType: isPdfDocument(filename, mimeType) ? "application/pdf" : mimeType,
+          chunkingStrategy: chosenStrategy,
         },
       });
 
@@ -162,10 +190,12 @@ export const ingestionWorker = new Worker<IngestionJobData, IngestionJobResult>(
         totalChunks: enrichedChunks.length,
         processedAt: new Date().toISOString(),
         source: fileSource,
+        chunkingStrategy: chosenStrategy,
+        pageCount,
       };
 
       console.log(
-        `[Worker] [Job #${job.id}] Finished successfully. Total chunks stored in Redis: ${enrichedChunks.length}`
+        `[Worker] [Job #${job.id}] Finished successfully. Total chunks stored in Redis: ${enrichedChunks.length} (${chosenStrategy})`
       );
       return result;
     } catch (processingError: any) {

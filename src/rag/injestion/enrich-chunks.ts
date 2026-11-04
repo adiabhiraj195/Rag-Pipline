@@ -186,9 +186,10 @@ export async function enrichChunks({
       ? `${fullDocText.slice(0, 8000)}\n\n[... middle content omitted ...]\n\n${fullDocText.slice(-4000)}`
       : fullDocText;
 
-  const shouldGenerateWithLLM =
-    generateContextAndSummary ?? Boolean(process.env.GROQ_API_KEY);
-
+  const shouldGenerateWithLLM = false
+  // const shouldGenerateWithLLM =
+  //   generateContextAndSummary ?? Boolean(process.env.GROQ_API_KEY);
+      
   console.log(
     `[Enrich Chunks] Enriching ${totalChunks} chunks (LLM Enrichment: ${shouldGenerateWithLLM ? "ENABLED" : "DISABLED"}, Concurrency: ${concurrency})...`
   );

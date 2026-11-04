@@ -1,10 +1,8 @@
-import { Document } from "@langchain/classic/document";
 import { semanticSearch } from "./semantic-search";
 import { lexicalSearch } from "./lexical-search";
 import { reciprocalRankFusion } from "./rrf";
 import { rerankDocuments } from "./reranker";
 import { buildContext, ContextChunkInfo } from "./context-builder";
-import { groqModel } from "../../llm/model";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -26,13 +24,18 @@ export interface RetrievalPipelineOptions {
   history?: ChatMessage[];
   /** Minimum relevance score threshold for reranked chunks (default: 0.75) */
   scoreThreshold?: number;
+  /** Actual user question for reranking and final prompt display (defaults to search query) */
+  userQuery?: string;
 }
 
 export interface RetrievalPipelineResult {
   query: string;
-  answer: string;
+  userQuery?: string;
   sources: ContextChunkInfo[];
   context: string;
+  systemPrompt: string;
+  userPrompt: string;
+  answer?: string;
   pipelineStats: {
     semanticRetrieved: number;
     lexicalRetrieved: number;
@@ -51,7 +54,6 @@ export interface RetrievalPipelineResult {
  * 3. Reciprocal Rank Fusion (RRF) to blend rankings
  * 4. Cross-Encoder ReRanking with Cohere
  * 5. Context Builder for grounded prompt construction
- * 6. Groq LLM inference
  */
 export async function runRetrievalPipeline(
   query: string,
@@ -92,7 +94,8 @@ export async function runRetrievalPipeline(
   console.log(`[Retrieval Pipeline] RRF blended into ${rrfCandidates.length} unique candidates.`);
 
   // Step 4: Cross-Encoder ReRanker with Cohere (scoring chunks against query)
-  const rerankedChunks = await rerankDocuments(rrfCandidates, trimmedQuery, {
+  const rerankQuery = options.userQuery?.trim() || trimmedQuery;
+  const rerankedChunks = await rerankDocuments(rrfCandidates, rerankQuery, {
     topN: topK,
   });
 
@@ -115,41 +118,22 @@ export async function runRetrievalPipeline(
   );
 
   // Step 5: Build grounded Context and Prompts using qualified chunks
+  const promptQuery = options.userQuery?.trim() || trimmedQuery;
   const { formattedContext, systemPrompt, userPrompt, chunksInfo } = buildContext(
     qualifiedChunks,
-    trimmedQuery
+    promptQuery
   );
 
-  // Step 6: Construct messages for Groq LLM
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-    { role: "system", content: systemPrompt },
-  ];
-
-  if (options.history && Array.isArray(options.history)) {
-    for (const msg of options.history) {
-      if (msg.role === "user" || msg.role === "assistant") {
-        messages.push({ role: msg.role, content: msg.content });
-      }
-    }
-  }
-
-  messages.push({ role: "user", content: userPrompt });
-
-  // Call LLM
-  console.log(`[Retrieval Pipeline] Invoking LLM for final generation...`);
-  const llmResponse = await groqModel.invoke(messages);
-  const answer = typeof llmResponse.content === "string"
-    ? llmResponse.content
-    : JSON.stringify(llmResponse.content);
-
   const durationMs = Date.now() - startTime;
-  console.log(`[Retrieval Pipeline] Pipeline completed in ${durationMs}ms.`);
+  console.log(`[Retrieval Pipeline] Pipeline completed in ${durationMs}ms with ${chunksInfo.length} sources.`);
 
   return {
     query: trimmedQuery,
-    answer,
+    userQuery: promptQuery,
     sources: chunksInfo,
     context: formattedContext,
+    systemPrompt,
+    userPrompt,
     pipelineStats: {
       semanticRetrieved: semanticResults.length,
       lexicalRetrieved: lexicalResults.length,

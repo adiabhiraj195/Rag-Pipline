@@ -82,12 +82,12 @@ export async function generatePresignedUploadUrl({
 }
 
 /**
- * Downloads a file's content directly as a UTF-8 string from S3.
+ * Downloads a file's raw content as a Buffer from S3 (essential for binary formats like PDF).
  */
-export async function downloadFileContentFromS3(
+export async function downloadFileBufferFromS3(
   s3Key: string,
   bucket = getS3BucketName()
-): Promise<string> {
+): Promise<Buffer> {
   const command = new GetObjectCommand({
     Bucket: bucket,
     Key: s3Key,
@@ -99,7 +99,19 @@ export async function downloadFileContentFromS3(
     throw new Error(`S3 response body is empty for key: ${s3Key}`);
   }
 
-  return await response.Body.transformToString("utf-8");
+  const byteArray = await response.Body.transformToByteArray();
+  return Buffer.from(byteArray);
+}
+
+/**
+ * Downloads a file's content directly as a UTF-8 string from S3.
+ */
+export async function downloadFileContentFromS3(
+  s3Key: string,
+  bucket = getS3BucketName()
+): Promise<string> {
+  const buffer = await downloadFileBufferFromS3(s3Key, bucket);
+  return buffer.toString("utf-8");
 }
 
 export interface PresignedDownloadUrlOptions {
